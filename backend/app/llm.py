@@ -24,6 +24,17 @@ def _extract_json(text: str):
     return json.loads(text[start:])
 
 
+def _check(r: httpx.Response):
+    if r.is_success:
+        return
+    try:
+        err = r.json().get("error") or {}
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+    except ValueError:
+        msg = r.text[:200]
+    raise RuntimeError(f"{r.status_code} from {r.url.host}: {msg or r.reason_phrase}")
+
+
 async def complete_json(system: str, user: str, max_tokens: int = 4000):
     p = provider()
     if p == "openai":
@@ -39,7 +50,7 @@ async def complete_json(system: str, user: str, max_tokens: int = 4000):
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 },
             )
-            r.raise_for_status()
+            _check(r)
             return _extract_json(r.json()["choices"][0]["message"]["content"])
     if p == "anthropic":
         async with httpx.AsyncClient(timeout=180) as c:
@@ -57,6 +68,6 @@ async def complete_json(system: str, user: str, max_tokens: int = 4000):
                     "messages": [{"role": "user", "content": user}],
                 },
             )
-            r.raise_for_status()
+            _check(r)
             return _extract_json("".join(b.get("text", "") for b in r.json()["content"]))
     raise RuntimeError("No LLM provider configured")

@@ -83,8 +83,10 @@ async def run_pipeline(job_id: str, raw: dict):
                 job["role"] = {**base["role"], **(a.get("role") or {})}
                 job["recruiter_brief"] = {**base["recruiter_brief"], **(a.get("recruiter_brief") or {})}
             except Exception as e:  # noqa: BLE001
-                r.log(f"LLM analysis failed, using heuristic analysis: {e}")
+                r.log(f"LLM analysis failed, using heuristic analysis for this run: {e}")
                 job["role"], job["recruiter_brief"] = base["role"], base["recruiter_brief"]
+                use_llm = False
+                job["mode"] = "Heuristic (LLM error)"
         else:
             job["role"], job["recruiter_brief"] = base["role"], base["recruiter_brief"]
         r.log(f"Role identified: {job['role'].get('title')} @ {job['role'].get('company')} ({job['role'].get('seniority')})")
