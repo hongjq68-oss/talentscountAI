@@ -21,7 +21,7 @@ export interface RecruiterBrief {
   red_flags: string[]; evaluation_criteria: { criterion: string; weight: number }[];
 }
 export interface TalentMap {
-  hiring_company_profile: { name: string; description: string; culture_signals: string[]; current_team_patterns: string[] };
+  hiring_company_profile: { name: string; description: string; market_segment?: string; direct_competitors?: string[]; competitor_basis?: string; culture_signals: string[]; current_team_patterns: string[] };
   target_companies: { name: string; tier: string; rationale: string; est_talent_pool?: string }[];
   peer_titles: string[]; talent_hubs: { location: string; rationale: string }[];
   market_trends: { trend: string; implication: string }[]; common_attributes: { attribute: string; prevalence: number }[];

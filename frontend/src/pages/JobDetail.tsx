@@ -165,6 +165,13 @@ function TalentMapView({ job }: { job: Job }) {
       <div className="grid lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2" title={`Hiring firm: ${t.hiring_company_profile?.name}`} icon={<Building2 className="h-4 w-4 text-brand-600" />}>
           <p className="text-sm text-slate-600">{t.hiring_company_profile?.description}</p>
+          {!!t.hiring_company_profile?.direct_competitors?.length && (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+              {t.hiring_company_profile.market_segment && <span className="chip bg-brand-50 text-brand-700 font-medium">{t.hiring_company_profile.market_segment}</span>}
+              <span className="text-slate-500">Top competitors:</span>
+              {t.hiring_company_profile.direct_competitors.map((c) => <span key={c} className="chip bg-slate-100 text-slate-700">{c}</span>)}
+            </div>
+          )}
           <div className="grid md:grid-cols-2 gap-6 mt-5">
             <div><div className="section-title mb-2">Current team patterns</div><List items={t.hiring_company_profile?.current_team_patterns} /></div>
             <div><div className="section-title mb-2">Culture signals</div><div className="flex flex-wrap gap-1.5">{t.hiring_company_profile?.culture_signals?.map((s) => <Badge key={s} tone="violet">{s}</Badge>)}</div>
@@ -208,6 +215,7 @@ function TalentMapView({ job }: { job: Job }) {
             </div>
           ))}
         </div>
+        {t.hiring_company_profile?.competitor_basis && <p className="text-xs text-slate-400 mt-4">Direct competitors: {t.hiring_company_profile.competitor_basis}</p>}
       </Card>
 
       <div className="grid lg:grid-cols-3 gap-6">

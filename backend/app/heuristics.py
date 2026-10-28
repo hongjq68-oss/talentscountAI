@@ -2,7 +2,7 @@
 import re
 from collections import Counter
 
-from .knowledge import ALL_SKILLS, INDUSTRY_COMPANIES, INDUSTRY_KEYWORDS, LOCATIONS, SENIORITY
+from .knowledge import ALL_SKILLS, COMPANY_COMPETITORS, INDUSTRY_COMPANIES, MARKET_SEGMENTS, INDUSTRY_KEYWORDS, LOCATIONS, SENIORITY
 
 ROLE_WORDS = r"(engineer|developer|scientist|manager|director|head|lead|architect|analyst|designer|officer|" \
              r"president|vp|chief|consultant|specialist|recruiter|partner|executive|administrator|strategist)"
@@ -175,6 +175,33 @@ def peer_titles(title: str, seniority: str) -> list[str]:
     return out
 
 
+def _same_co(a: str, b: str) -> bool:
+    a, b = re.sub(r"\s*\(.*\)", "", a).lower().strip(), b.lower().strip()
+    return bool(a and b) and (a == b or a.startswith(b + " ") or b.startswith(a + " "))
+
+
+def market_segment(text: str, company: str = "") -> tuple[str, list[str]]:
+    """Classify what the hiring firm sells from its own description; weights the intro/about-us text."""
+    about = _section(text, [rf"about {re.escape(company)}" if company else "about us", "about us", "who we are"])
+    t = f" {(text[:1200] + ' ' + about[:1500]).lower()} "
+    scored = [(sum(t.count(k) for k in keys), name, players) for name, keys, players in MARKET_SEGMENTS]
+    n, name, players = max(scored, key=lambda x: x[0])
+    return (name, players) if n >= 2 else ("", [])
+
+
+def direct_competitors(text: str, company: str, industry: str) -> tuple[list[str], str, str]:
+    """Returns (competitors, market segment, basis)."""
+    segment, players = market_segment(text, company)
+    key = re.sub(r"\b(inc|ltd|labs|technologies|holdings|group|pte)\b\.?", "", company.lower()).strip(" ,.")
+    if key in COMPANY_COMPETITORS:
+        known = COMPANY_COMPETITORS[key]
+        overlap, seg = max((len(set(known) & set(ps)), name) for name, _, ps in MARKET_SEGMENTS)
+        return known, seg if overlap >= 2 else segment, f"Known competitor set for {company}"
+    if players:
+        return [c for c in players if not _same_co(c, company)], segment, f"Detected from {company or 'the company'}'s product description"
+    return [c for c in INDUSTRY_COMPANIES.get(industry, []) if not _same_co(c, company)], "", f"{industry} industry leaders (no specific product segment detected)"
+
+
 def _a(word: str) -> str:
     return "an" if word[:1].lower() in "aeiou" else "a"
 
@@ -197,8 +224,9 @@ def analyze(text: str, hints: dict) -> dict:
     reqs = _bullets(req_block)
     cats = Counter(cat for s, cat, _ in skills)
     function = cats.most_common(1)[0][0] if cats else "General"
-    targets = [c for c in INDUSTRY_COMPANIES.get(industry, []) if c.lower() != company.lower()]
-    adj_ind = [i for i in INDUSTRY_COMPANIES if i != industry][:2]
+    comps, segment, comp_basis = direct_competitors(core, company, industry)
+    peers = [c for c in INDUSTRY_COMPANIES.get(industry, []) if not _same_co(c, company) and c not in comps]
+    targets = comps[:6] + peers
     adjacent = [c for i in ("Consumer Internet", "Enterprise SaaS") if i != industry for c in INDUSTRY_COMPANIES[i][:4]]
     gtm = bool(GTM_ROLE.search(f"{title}\n{text[:400]}"))
     if gtm:
@@ -240,15 +268,18 @@ def analyze(text: str, hints: dict) -> dict:
     talent_map = {
         "hiring_company_profile": {
             "name": company or "Hiring company",
-            "description": f"{industry} organisation hiring for {title}.",
+            "description": f"{industry} organisation{' in ' + segment if segment else ''} hiring for {title}.",
+            "market_segment": segment,
+            "direct_competitors": comps[:6],
+            "competitor_basis": comp_basis,
             "culture_signals": [s for s in ["Fast-paced" if re.search(r"fast[- ]paced|startup", text, re.I) else "",
                                             "Remote-friendly" if re.search(r"remote|hybrid", text, re.I) else "",
                                             "Data-driven" if re.search(r"data[- ]driven|metrics", text, re.I) else "",
                                             "Customer-obsessed" if re.search(r"customer", text, re.I) else ""] if s],
             "current_team_patterns": [f"Team likely built around {', '.join(must[:3])}" if must else "Add an LLM key for team pattern analysis"],
         },
-        "target_companies": [{"name": c, "tier": "Primary", "rationale": f"Direct {industry.lower()} competitor with similar talent profile"} for c in targets[:6]]
-        + [{"name": c, "tier": "Secondary", "rationale": "Enterprise tech sales org selling to engineering buyers" if gtm else "Comparable scale and skills, likely transferable"} for c in targets[6:10]]
+        "target_companies": [{"name": c, "tier": "Primary", "rationale": f"Direct competitor of {company or 'the hiring firm'}" + (f" in {segment.lower()}" if segment else "")} for c in targets[:6]]
+        + [{"name": c, "tier": "Secondary", "rationale": "Enterprise tech sales org selling to engineering buyers" if gtm else f"{industry} peer with comparable talent"} for c in targets[6:10]]
         + [{"name": c, "tier": "Adjacent", "rationale": "Adjacent industry with strong talent density in required skills"} for c in adjacent[:4]],
         "peer_titles": peer_titles(title, seniority),
         "talent_hubs": [{"location": location or "Global", "rationale": "Primary hiring location"}],

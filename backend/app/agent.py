@@ -5,6 +5,7 @@ import traceback
 from datetime import datetime, timezone
 
 from . import heuristics, llm, sourcing
+from .knowledge import COMPANY_COMPETITORS, INDUSTRY_COMPANIES, MARKET_SEGMENTS
 from .store import load_job, save_job
 
 STEPS = [
@@ -113,10 +114,20 @@ async def run_pipeline(job_id: str, raw: dict):
             except Exception as e:  # noqa: BLE001
                 r.log(f"Team benchmark search failed: {e}")
         tmap = base["talent_map"]
+        if sourcing.search_provider() and company:
+            try:
+                web = await _web_competitors(company)
+                if len(web) >= 3:
+                    _set_primary(tmap, web, f"Named as a {company} competitor / alternative in web results")
+                    r.log(f"Web search found direct competitors of {company}: {', '.join(web[:6])}")
+            except Exception as e:  # noqa: BLE001
+                r.log(f"Competitor web search failed: {e}")
         if use_llm:
             try:
+                job["talent_map_hint"] = {k: tmap["hiring_company_profile"].get(k) for k in ("market_segment", "direct_competitors")}
                 t = await llm.complete_json(RECRUITER_SYSTEM, _talent_map_prompt(job, footprint, team_benchmark), 5000)
-                tmap = {**tmap, **t}
+                job.pop("talent_map_hint", None)
+                tmap = {**tmap, **t, "hiring_company_profile": {**tmap.get("hiring_company_profile", {}), **(t.get("hiring_company_profile") or {})}}
             except Exception as e:  # noqa: BLE001
                 r.log(f"LLM talent mapping failed, using heuristic map: {e}")
         tmap["github_footprint"] = footprint
@@ -285,19 +296,43 @@ Return JSON:
 }}"""
 
 
+def _known_companies() -> set[str]:
+    return ({c for _, _, ps in MARKET_SEGMENTS for c in ps} | {c for cs in INDUSTRY_COMPANIES.values() for c in cs}
+            | {c for cs in COMPANY_COMPETITORS.values() for c in cs})
+
+
+async def _web_competitors(company: str) -> list[str]:
+    res = await sourcing.web_search(f'"{company}" competitors OR alternatives', 10)
+    blob = " ".join(f"{x.get('title', '')} {x.get('snippet', '')}" for x in res)
+    counts = {}
+    for c in _known_companies():
+        names = [re.sub(r"\s*\(.*\)", "", c)] + re.findall(r"\((.*?)\)", c)
+        n = sum(len(re.findall(rf"(?<![A-Za-z0-9]){re.escape(x)}(?![A-Za-z0-9])", blob)) for x in names)
+        if n and not heuristics._same_co(c, company):
+            counts[c] = n
+    return sorted(counts, key=lambda c: -counts[c])[:8]
+
+
+def _set_primary(tmap: dict, comps: list[str], why: str):
+    rest = [t for t in tmap["target_companies"] if t["tier"] != "Primary" and t["name"] not in comps]
+    tmap["target_companies"] = [{"name": c, "tier": "Primary", "rationale": why} for c in comps[:6]] + rest
+    tmap["hiring_company_profile"].update(direct_competitors=comps[:6], competitor_basis=why)
+
+
 def _talent_map_prompt(job: dict, footprint, bench) -> str:
     role = job["role"]
     return f"""Build a talent map for this search. Start from the HIRING FIRM ({role.get('company')}): what kind of people it hires
 for this role today, where they come from, then map the external market.
 
 ROLE: {json.dumps({k: role.get(k) for k in ('title','company','location','seniority','industry','function','must_have_skills','nice_to_have_skills','years_experience')})}
+DIRECT COMPETITOR HINTS (keyword/web based, verify and correct): {json.dumps((job.get('talent_map_hint') or {}))}
 HIRING FIRM PUBLIC GITHUB FOOTPRINT: {json.dumps(footprint) if footprint else 'unknown'}
 CURRENT PROFILES AT HIRING FIRM IN SIMILAR ROLES (from web search): {json.dumps([{'name': b['name'], 'headline': b['headline'], 'snippet': b['summary'][:200]} for b in bench][:10]) if bench else 'not available'}
 
 Return JSON:
 {{
- "hiring_company_profile": {{"name": str, "description": str, "culture_signals": [str], "current_team_patterns": [str] (4-6 observations about background, prior employers, education, tenure of people in similar roles at this firm)}},
- "target_companies": [{{"name": str, "tier": "Primary"|"Secondary"|"Adjacent", "rationale": str, "est_talent_pool": str}}] (12-16 real companies, local to the location where relevant),
+ "hiring_company_profile": {{"name": str, "description": str, "market_segment": str (what it sells, e.g. "AI coding agents"), "direct_competitors": [str], "competitor_basis": str, "culture_signals": [str], "current_team_patterns": [str] (4-6 observations about background, prior employers, education, tenure of people in similar roles at this firm)}},
+ "target_companies": [{{"name": str, "tier": "Primary"|"Secondary"|"Adjacent", "rationale": str, "est_talent_pool": str}}] (12-16 real companies, local to the location where relevant). Primary = 5-6 DIRECT competitors of the hiring firm: companies selling a similar product to the same customers (e.g. for an AI coding-agent company: Cursor, GitHub Copilot, Replit - not generic AI labs). Secondary = companies with the same role and talent profile. Adjacent = transferable pools,
  "peer_titles": [str] (5-8 equivalent titles used across target companies),
  "talent_hubs": [{{"location": str, "rationale": str}}] (2-4),
  "market_trends": [{{"trend": str, "implication": str}}] (4-6, current hiring-market trends for this role),
