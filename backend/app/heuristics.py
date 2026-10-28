@@ -27,19 +27,41 @@ def strip_boilerplate(text: str) -> str:
     return "\n".join(l for l in text.splitlines() if not BOILERPLATE.search(l))
 
 
+SKILL_ALIASES = [
+    ("Enterprise Sales", "Business & Leadership", r"enterprise (?:customers|clients|accounts|deals|software deals)|selling [^.\n]{0,40}enterprise"),
+    ("Technical Sales", "Business & Leadership", r"technical (?:sales|solutions|products)|selling (?:highly |deeply )?technical|sales engineer|solutions engineer|forward deployed"),
+    ("Full-cycle Sales", "Business & Leadership", r"(?:entire|full|end-to-end) sales cycle|prospecting (?:through|to) close"),
+    ("Pipeline Generation", "Business & Leadership", r"generat\w* pipeline|pipeline generation|outbound prospecting"),
+    ("C-suite Engagement", "Business & Leadership", r"c-suite|c-level (?:executives|stakeholders)"),
+    ("Complex Deal Closing", "Business & Leadership", r"clos\w* (?:large|complex|multi-?million)[^.\n]{0,30}deals|layered buying"),
+]
+ALIAS_PATTERNS = [(s, cat, re.compile(rx, re.I)) for s, cat, rx in SKILL_ALIASES]
+
+
 def find_skills(text: str) -> list[tuple[str, str, int]]:
-    out = []
-    for s, cat, rx in SKILL_PATTERNS:
+    out, seen = [], set()
+    for s, cat, rx in SKILL_PATTERNS + ALIAS_PATTERNS:
         n = len(rx.findall(text))
-        if n:
+        if n and s not in seen:
+            seen.add(s)
             out.append((s, cat, n))
+        elif n:
+            out = [(a, c, k + n) if a == s else (a, c, k) for a, c, k in out]
     return out
+
+
+GTM_SELLERS = ["GitHub", "GitLab", "Datadog", "Snowflake", "MongoDB", "Databricks", "HashiCorp", "Atlassian", "Palantir", "Scale AI"]
+SALES_IC = re.compile(r"\b(account (?:director|executive|manager)|sales executive|client partner)\b", re.I)
+GTM_ROLE = re.compile(r"\b(sales|account (?:director|executive|manager)|business development|go-to-market|gtm|partnerships|revenue)\b", re.I)
+REGION_SUFFIX = re.compile(r"\s*[-–—,(|]\s*(?:apac|emea|amer|americas|anz|sea|asia(?: pacific)?|europe|latam|north america|japan|india|global|remote)\b.*$", re.I)
 
 
 def seniority_of(title: str) -> str:
     t = f" {title.lower()} "
+    if SALES_IC.search(t) and not re.search(r"\b(head|vp|vice president|chief)\b", t):
+        return "Senior IC"
     for level, keys in SENIORITY:
-        if any(k in t for k in keys):
+        if any(re.search(rf"(?<![a-z]){re.escape(k.strip())}(?![a-z])", t) for k in keys):
             return level
     return "Mid-level IC"
 
@@ -128,6 +150,12 @@ def _bullets(block: str, limit: int = 8) -> list[str]:
 
 
 def peer_titles(title: str, seniority: str) -> list[str]:
+    region = REGION_SUFFIX.search(title)
+    title = REGION_SUFFIX.sub("", title).strip() or title
+    if GTM_ROLE.search(title) and seniority in ("Senior IC", "Manager / Lead", "Mid-level IC"):
+        sfx = f" ({region.group(0).strip(' -–—,(|')})" if region else ""
+        return [title + sfx, "Enterprise Account Executive", "Strategic Account Director", "Enterprise Account Manager",
+                "Regional Sales Director", "Senior Sales Engineer"]
     core = re.sub(r"(?i)\b(senior|sr\.?|junior|jr\.?|lead|principal|staff|head of|director of|vp of|vice president of|chief)\b", "", title).strip(" ,-")
     core = core or title
     ladders = {
@@ -168,6 +196,11 @@ def analyze(text: str, hints: dict) -> dict:
     targets = [c for c in INDUSTRY_COMPANIES.get(industry, []) if c.lower() != company.lower()]
     adj_ind = [i for i in INDUSTRY_COMPANIES if i != industry][:2]
     adjacent = [c for i in ("Consumer Internet", "Enterprise SaaS") if i != industry for c in INDUSTRY_COMPANIES[i][:4]]
+    gtm = bool(GTM_ROLE.search(f"{title}\n{text[:400]}"))
+    if gtm:
+        sellers = [c for c in GTM_SELLERS if c.lower() != company.lower() and c not in targets[:6]]
+        targets = targets[:6] + sellers[:4]
+        adjacent = [c for c in INDUSTRY_COMPANIES.get("Enterprise SaaS", []) if c not in targets and c.lower() != company.lower()][:4]
     exec_level = seniority in ("C-Level", "VP / Head", "Director")
 
     role = {
@@ -211,7 +244,7 @@ def analyze(text: str, hints: dict) -> dict:
             "current_team_patterns": [f"Team likely built around {', '.join(must[:3])}" if must else "Add an LLM key for team pattern analysis"],
         },
         "target_companies": [{"name": c, "tier": "Primary", "rationale": f"Direct {industry.lower()} competitor with similar talent profile"} for c in targets[:6]]
-        + [{"name": c, "tier": "Secondary", "rationale": "Comparable scale and skills, likely transferable"} for c in targets[6:10]]
+        + [{"name": c, "tier": "Secondary", "rationale": "Enterprise tech sales org selling to engineering buyers" if gtm else "Comparable scale and skills, likely transferable"} for c in targets[6:10]]
         + [{"name": c, "tier": "Adjacent", "rationale": "Adjacent industry with strong talent density in required skills"} for c in adjacent[:4]],
         "peer_titles": peer_titles(title, seniority),
         "talent_hubs": [{"location": location or "Global", "rationale": "Primary hiring location"}],

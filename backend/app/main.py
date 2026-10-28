@@ -76,7 +76,7 @@ async def create_job(
             page = await ingest.fetch_url(url.strip())
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"Could not fetch URL ({e}). Some job boards block bots — paste the JD text instead.")
-        raw.update(page)
+        raw.update({k: v for k, v in page.items() if v and not raw.get(k)})
         source = {"type": "link", "label": url.strip()}
     elif text.strip():
         raw["text"] = text.strip()

@@ -190,7 +190,7 @@ async def source_github(skills: list[str], location: str, keywords: list[str], l
             langs.append(l)
     loc = "" if not location or location.lower() in ("not specified", "remote", "global") else location.split(",")[0].strip()
     queries = []
-    for l in langs[:2] or [None]:
+    for l in langs[:2]:
         q = " ".join(filter(None, [f"language:{l}" if l else None, f'location:"{loc}"' if loc else None, "followers:>15", "type:user"]))
         if l or loc:
             queries.append(q)
