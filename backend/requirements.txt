@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+httpx
+python-docx
+pypdf
+openpyxl
+beautifulsoup4
+python-multipart
+pydantic

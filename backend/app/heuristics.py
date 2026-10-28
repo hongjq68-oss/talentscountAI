@@ -1,0 +1,257 @@
+"""Rule-based JD analysis used when no LLM key is configured (and as a safety net)."""
+import re
+from collections import Counter
+
+from .knowledge import ALL_SKILLS, INDUSTRY_COMPANIES, INDUSTRY_KEYWORDS, LOCATIONS, SENIORITY
+
+ROLE_WORDS = r"(engineer|developer|scientist|manager|director|head|lead|architect|analyst|designer|officer|" \
+             r"president|vp|chief|consultant|specialist|recruiter|partner|executive|administrator|strategist)"
+
+
+def _skill_regex(skill: str) -> re.Pattern:
+    esc = re.escape(skill)
+    return re.compile(rf"(?<![A-Za-z0-9]){esc}(?![A-Za-z0-9])", re.I if len(skill) > 2 else 0)
+
+
+SKILL_PATTERNS = [(s, cat, _skill_regex(s)) for s, cat in ALL_SKILLS]
+
+
+def find_skills(text: str) -> list[tuple[str, str, int]]:
+    out = []
+    for s, cat, rx in SKILL_PATTERNS:
+        n = len(rx.findall(text))
+        if n:
+            out.append((s, cat, n))
+    return out
+
+
+def seniority_of(title: str) -> str:
+    t = f" {title.lower()} "
+    for level, keys in SENIORITY:
+        if any(k in t for k in keys):
+            return level
+    return "Mid-level IC"
+
+
+def guess_title(text: str, page_title: str = "") -> str:
+    candidates = []
+    if page_title:
+        candidates.extend(re.split(r"\s[|\-–—]\s|:", page_title))
+    candidates.extend(l.strip() for l in text.splitlines()[:40])
+    for c in candidates:
+        c = c.strip(" -|•*")
+        if 3 < len(c) < 90 and re.search(ROLE_WORDS, c, re.I) and not c.lower().startswith(("we ", "you ", "the ", "our ")):
+            c = re.sub(r"^(job title|position|role)\s*[:\-]\s*", "", c, flags=re.I)
+            return c[:80]
+    return "Open Role"
+
+
+ATS_HOSTS = ("linkedin", "indeed", "glassdoor", "greenhouse", "lever", "workday", "myworkdayjobs", "smartrecruiters",
+             "ashbyhq", "workable", "jobvite", "icims", "bamboohr", "recruitee", "teamtailor", "jobstreet", "mycareersfuture")
+
+
+def guess_company(text: str, site_name: str = "", host: str = "") -> str:
+    m = re.search(r"(?:company|organisation|organization|employer)[ \t]*[:\-][ \t]*([A-Z][\w&.\- ]{1,40})", text, re.I)
+    if m:
+        return m.group(1).strip()
+    if site_name and not any(a in site_name.lower() for a in ATS_HOSTS):
+        return site_name
+    if host and not any(a in host for a in ATS_HOSTS):
+        parts = [p for p in host.split(".") if p not in ("www", "jobs", "careers", "career", "apply", "com", "co", "io", "net", "org", "sg", "uk", "ai")]
+        if parts:
+            return parts[-1].capitalize()
+    m = re.search(r"\bAbout[ \t]+([A-Z][\w&.\-]+(?:[ \t]+[A-Z][\w&.\-]+){0,3})", text)
+    if m and m.group(1).lower() not in ("the role", "you", "us", "the team", "the job"):
+        return m.group(1).strip()
+    m = re.search(r"^[ \t]*([A-Z][\w&.]+(?:[ \t]+[A-Z][\w&.]+){0,2})[ \t]+(?:is|was)[ \t]+(?:a|an|the|born|founded|building)\b", text, re.M)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"\bat[ \t]+([A-Z][\w&.\-]+(?:[ \t]+[A-Z][\w&.\-]+){0,2})", text)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def guess_location(text: str) -> str:
+    counts = Counter()
+    for loc in LOCATIONS:
+        n = len(re.findall(rf"\b{re.escape(loc)}\b", text, re.I))
+        if n:
+            counts[loc] = n
+    return counts.most_common(1)[0][0] if counts else ""
+
+
+def guess_industry(text: str) -> str:
+    t = f" {text.lower()} "
+    scores = {ind: sum(t.count(k) for k in keys) for ind, keys in INDUSTRY_KEYWORDS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] else "Enterprise SaaS"
+
+
+def _section(text: str, heads: list[str]) -> str:
+    rx = re.compile(rf"^\s*(?:{'|'.join(heads)})\b.*$", re.I | re.M)
+    m = rx.search(text)
+    if not m:
+        return ""
+    head_line = m.group(0)
+    rest = text[m.end():]
+    if ":" in head_line:
+        rest = head_line.split(":", 1)[1] + rest
+    stop = re.search(r"^\s*(?:about|benefits|what we offer|why join|perks|how to apply|nice to have|preferred|bonus|requirements|qualifications|what you(?:'|’)ll need|what we(?:'|’)re looking for|who you are|responsibilities|what you(?:'|’)ll do)\b.*$", rest, re.I | re.M)
+    return rest[: stop.start()] if stop else rest[:3000]
+
+
+def _bullets(block: str, limit: int = 8) -> list[str]:
+    items = []
+    for line in block.splitlines():
+        line = line.strip(" •*-–·\t")
+        if 15 < len(line) < 240:
+            items.append(line)
+    return items[:limit]
+
+
+def peer_titles(title: str, seniority: str) -> list[str]:
+    core = re.sub(r"(?i)\b(senior|sr\.?|junior|jr\.?|lead|principal|staff|head of|director of|vp of|vice president of|chief)\b", "", title).strip(" ,-")
+    core = core or title
+    ladders = {
+        "C-Level": [title, f"VP {core}", f"SVP {core}", f"Head of {core}", "Managing Director"],
+        "VP / Head": [title, f"Head of {core}", f"VP {core}", f"Director of {core}", f"Senior Director {core}"],
+        "Director": [title, f"Director of {core}", f"Head of {core}", f"Senior Manager {core}", f"Lead {core}"],
+        "Manager / Lead": [title, f"Lead {core}", f"Staff {core}", f"Principal {core}", f"{core} Manager"],
+        "Senior IC": [title, f"Senior {core}", f"Lead {core}", f"Staff {core}", core],
+        "Mid-level IC": [title, core, f"Senior {core}", f"{core} II"],
+    }
+    seen, out = set(), []
+    for t in ladders.get(seniority, [title]):
+        t = re.sub(r"\s+", " ", t).strip()
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out
+
+
+def analyze(text: str, hints: dict) -> dict:
+    title = hints.get("title") or guess_title(text, hints.get("page_title", ""))
+    company = hints.get("company") or guess_company(text, hints.get("site_name", ""), hints.get("host", ""))
+    location = hints.get("location") or guess_location(text)
+    industry = guess_industry(text)
+    seniority = seniority_of(title)
+    skills = find_skills(text)
+    req_block = _section(text, ["requirements", "qualifications", "what you(?:'|’)ll need", "what we(?:'|’)re looking for", "must have", "you have", "who you are", "skills"])
+    req_skills = {s for s, _, _ in find_skills(req_block)} if req_block else set()
+    ranked = sorted(skills, key=lambda x: (x[0] not in req_skills, -x[2]))
+    must = [s for s, _, n in ranked if s in req_skills or n >= 2][:10] or [s for s, _, _ in ranked[:6]]
+    nice = [s for s, _, _ in ranked if s not in must][:10]
+    yrs = re.search(r"(\d{1,2})\s*\+?\s*(?:-\s*\d+\s*)?years", text, re.I)
+    resp = _bullets(_section(text, ["responsibilities", "what you(?:'|’)ll do", "the role", "your role", "key responsibilities", "duties"]))
+    reqs = _bullets(req_block)
+    cats = Counter(cat for s, cat, _ in skills)
+    function = cats.most_common(1)[0][0] if cats else "General"
+    targets = [c for c in INDUSTRY_COMPANIES.get(industry, []) if c.lower() != company.lower()]
+    adj_ind = [i for i in INDUSTRY_COMPANIES if i != industry][:2]
+    adjacent = [c for i in ("Consumer Internet", "Enterprise SaaS") if i != industry for c in INDUSTRY_COMPANIES[i][:4]]
+    exec_level = seniority in ("C-Level", "VP / Head", "Director")
+
+    role = {
+        "title": title, "company": company or "Hiring company", "location": location or "Not specified",
+        "seniority": seniority, "function": function, "industry": industry,
+        "years_experience": f"{yrs.group(1)}+ years" if yrs else ("12+ years" if exec_level else "Not specified"),
+        "summary": f"{title} ({seniority}) role in {industry.lower()} focused on {', '.join(must[:4]) or 'core domain expertise'}.",
+        "must_have_skills": must, "nice_to_have_skills": nice,
+        "responsibilities": resp or reqs[:5], "requirements": reqs,
+        "education": "Bachelor's or higher" if re.search(r"bachelor|degree|master|phd|mba", text, re.I) else "Not specified",
+        "compensation_hint": "",
+    }
+    brief = {
+        "executive_summary": f"{company or 'The client'} is hiring a {title}{' in ' + location if location else ''}. "
+                             f"Prioritise candidates with proven depth in {', '.join(must[:3]) or 'the core skills'} from "
+                             f"{industry.lower()} peers, with {role['years_experience']} of relevant experience.",
+        "ideal_candidate_persona": f"A {seniority.lower()} operator currently at a {industry.lower()} leader such as "
+                                   f"{', '.join(targets[:3]) or 'a market peer'}, who has shipped outcomes using "
+                                   f"{', '.join(must[:4]) or 'the required stack'} and wants a broader remit.",
+        "selling_points": ["Scope and ownership of a high-impact mandate", f"Exposure to {industry.lower()} growth",
+                           "Opportunity to shape team, culture and roadmap"],
+        "intake_questions": ["What are the 2-3 outcomes this hire must deliver in the first 12 months?",
+                             "Which companies or teams would you most like to hire from (and avoid)?",
+                             "What is the approved compensation band and flexibility on location?",
+                             "Who are the key stakeholders and what does the interview loop look like?",
+                             "Why is the role open now and what happened with previous hires?"],
+        "red_flags": ["Title inflation without matching scope", "Short tenures (<1.5 yrs) across recent roles",
+                      "Skill keywords without evidence of shipped outcomes"],
+        "evaluation_criteria": [{"criterion": "Core skills match", "weight": 35}, {"criterion": "Relevant company / domain", "weight": 25},
+                                {"criterion": "Seniority & scope", "weight": 20}, {"criterion": "Location fit", "weight": 10},
+                                {"criterion": "Public signals (OSS, talks, writing)", "weight": 10}],
+    }
+    talent_map = {
+        "hiring_company_profile": {
+            "name": company or "Hiring company",
+            "description": f"{industry} organisation hiring for {title}.",
+            "culture_signals": [s for s in ["Fast-paced" if re.search(r"fast[- ]paced|startup", text, re.I) else "",
+                                            "Remote-friendly" if re.search(r"remote|hybrid", text, re.I) else "",
+                                            "Data-driven" if re.search(r"data[- ]driven|metrics", text, re.I) else "",
+                                            "Customer-obsessed" if re.search(r"customer", text, re.I) else ""] if s],
+            "current_team_patterns": [f"Team likely built around {', '.join(must[:3])}" if must else "Add an LLM key for team pattern analysis"],
+        },
+        "target_companies": [{"name": c, "tier": "Primary", "rationale": f"Direct {industry.lower()} competitor with similar talent profile"} for c in targets[:6]]
+        + [{"name": c, "tier": "Secondary", "rationale": "Comparable scale and skills, likely transferable"} for c in targets[6:10]]
+        + [{"name": c, "tier": "Adjacent", "rationale": "Adjacent industry with strong talent density in required skills"} for c in adjacent[:4]],
+        "peer_titles": peer_titles(title, seniority),
+        "talent_hubs": [{"location": location or "Global", "rationale": "Primary hiring location"}],
+        "market_trends": [
+            {"trend": f"High competition for {must[0] if must else 'specialist'} talent", "implication": "Lead with mission and scope; move fast on process"},
+            {"trend": "AI adoption reshaping role expectations", "implication": "Screen for hands-on AI/automation literacy"},
+            {"trend": "Hybrid work is the default expectation", "implication": "Be explicit about flexibility in outreach"},
+        ],
+        "common_attributes": [{"attribute": f"Hands-on with {s}", "prevalence": max(40, 90 - i * 8)} for i, s in enumerate(must[:6])],
+        "career_paths": [f"{peer_titles(title, seniority)[-1]} → {title}", f"{title} at {targets[0] if targets else 'peer company'} → {title} at {company or 'client'}"],
+        "talent_pool_estimate": "Medium" if exec_level else "Large",
+        "competition_level": "High" if exec_level or industry in ("AI & Machine Learning", "Fintech & Payments") else "Medium",
+        "diversity_notes": "Broaden to adjacent industries and non-traditional backgrounds to widen the slate.",
+    }
+    strategy = build_strategy(role, talent_map)
+    return {"role": role, "recruiter_brief": brief, "talent_map": talent_map, "strategy": strategy}
+
+
+def _or(items: list[str], n: int) -> str:
+    items = [i for i in items if i][:n]
+    return "(" + " OR ".join(f'"{i}"' for i in items) + ")" if items else ""
+
+
+def build_strategy(role: dict, tmap: dict) -> dict:
+    must, nice = role.get("must_have_skills", []), role.get("nice_to_have_skills", [])
+    titles = tmap.get("peer_titles") or [role["title"]]
+    companies = [c["name"] for c in tmap.get("target_companies", [])]
+    loc = role.get("location", "")
+    loc = "" if loc.lower() in ("not specified", "remote", "global") else loc
+    loc_q = f' "{loc}"' if loc else ""
+    li = " AND ".join(x for x in [_or(titles, 4), _or(must, 4), _or(companies, 6)] if x)
+    xray = f"site:linkedin.com/in {_or(titles, 3)} {_or(must, 3)}{loc_q} -jobs -hiring"
+    return {
+        "skills_matrix": [{"skill": s, "category": "Core", "importance": "Must-have", "signal": "Recent role responsibilities, projects, GitHub repos"} for s in must]
+        + [{"skill": s, "category": "Supporting", "importance": "Nice-to-have", "signal": "Profile keywords, certifications, side projects"} for s in nice[:6]],
+        "channels": [
+            {"channel": "LinkedIn Recruiter / X-ray", "priority": "High", "tactic": "Target peer titles at primary companies; InMail with role-specific hook"},
+            {"channel": "GitHub", "priority": "High" if role.get("function") in ("Languages", "Backend", "Frontend", "Data & AI", "Cloud & Infra") else "Low", "tactic": "Find active contributors by language/location; reference their repos in outreach"},
+            {"channel": "Referrals & alumni networks", "priority": "Medium", "tactic": "Mine alumni of target companies and the hiring team's networks"},
+            {"channel": "Communities, events & content", "priority": "Medium", "tactic": "Speakers, meetup organisers, authors of relevant posts/papers"},
+        ],
+        "boolean_strings": {
+            "linkedin": li,
+            "google_xray": xray,
+            "github": f"{'language:' + must[0].lower() if must else ''}{' location:' + chr(34) + loc + chr(34) if loc else ''} followers:>20".strip(),
+        },
+        "xray_queries": [
+            xray,
+            f"site:linkedin.com/in {_or(titles, 2)} {_or(companies[:5], 5)}{loc_q}",
+            f"({_or(titles, 2)}) {_or(must, 3)}{loc_q} (resume OR cv OR portfolio OR \"about me\") -jobs -job",
+        ],
+        "outreach_template": (
+            f"Hi {{first_name}},\n\nI'm working with {role.get('company')} on a {role['title']} mandate{(' in ' + loc) if loc else ''}. "
+            f"Your work on {{hook}} stood out — particularly your experience with {', '.join(must[:2]) or 'this space'}.\n\n"
+            "The role offers real scope: {selling_point}. Open to a 15-minute confidential chat this week?\n\nBest,\n{recruiter}"
+        ),
+        "timeline": [{"week": "Week 1", "focus": "Intake, calibration profiles, first 30 outreach"},
+                     {"week": "Week 2", "focus": "Expand to secondary/adjacent companies; screen calls"},
+                     {"week": "Week 3", "focus": "Present shortlist of 5-8; hiring manager feedback"},
+                     {"week": "Week 4+", "focus": "Interviews, references, offer management"}],
+    }

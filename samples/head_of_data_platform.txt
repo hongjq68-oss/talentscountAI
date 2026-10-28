@@ -1,0 +1,24 @@
+Head of Data Platform
+Grab — Singapore
+
+About Grab
+Grab is Southeast Asia's leading superapp, providing deliveries, mobility and financial services.
+
+What you'll do
+- Lead a team of 25+ data and platform engineers building our real-time data platform
+- Own the strategy and roadmap for streaming, lakehouse and ML infrastructure
+- Partner with product, analytics and machine learning teams across the region
+- Drive reliability, cost efficiency and governance of petabyte-scale data systems
+- Hire, mentor and grow senior engineering leaders
+
+What you'll need
+- 12+ years of experience in data engineering, with 5+ years leading engineering teams
+- Deep expertise in Spark, Kafka, Airflow and cloud data platforms (AWS)
+- Strong programming skills in Python, Scala or Java
+- Experience with Kubernetes, Terraform and modern Data Engineering practices
+- Track record of stakeholder management and cross-functional leadership
+- Experience with Machine Learning platforms and MLOps is a plus
+
+Nice to have
+- Experience in fintech or payments
+- Exposure to Databricks, Snowflake or dbt
