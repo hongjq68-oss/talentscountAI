@@ -175,6 +175,10 @@ def peer_titles(title: str, seniority: str) -> list[str]:
     return out
 
 
+def _a(word: str) -> str:
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
 def analyze(text: str, hints: dict) -> dict:
     title = hints.get("title") or guess_title(text, hints.get("page_title", ""))
     company = hints.get("company") or guess_company(text, hints.get("site_name", ""), hints.get("host", ""))
@@ -207,17 +211,17 @@ def analyze(text: str, hints: dict) -> dict:
         "title": title, "company": company or "Hiring company", "location": location or "Not specified",
         "seniority": seniority, "function": function, "industry": industry,
         "years_experience": f"{yrs.group(1)}+ years" if yrs else ("12+ years" if exec_level else "Not specified"),
-        "summary": f"{title} ({seniority}) role in {industry.lower()} focused on {', '.join(must[:4]) or 'core domain expertise'}.",
+        "summary": f"{title} ({seniority}) role in {industry} focused on {', '.join(must[:4]) or 'core domain expertise'}.",
         "must_have_skills": must, "nice_to_have_skills": nice,
         "responsibilities": resp or reqs[:5], "requirements": reqs,
         "education": "Bachelor's or higher" if re.search(r"bachelor|degree|master|phd|mba", text, re.I) else "Not specified",
         "compensation_hint": "",
     }
     brief = {
-        "executive_summary": f"{company or 'The client'} is hiring a {title}{' in ' + location if location else ''}. "
+        "executive_summary": f"{company or 'The client'} is hiring {_a(title)} {title}{' in ' + location if location else ''}. "
                              f"Prioritise candidates with proven depth in {', '.join(must[:3]) or 'the core skills'} from "
-                             f"{industry.lower()} peers, with {role['years_experience']} of relevant experience.",
-        "ideal_candidate_persona": f"A {seniority.lower()} operator currently at a {industry.lower()} leader such as "
+                             f"{industry} peers" + (f", with {role['years_experience']} of relevant experience." if yrs or exec_level else "."),
+        "ideal_candidate_persona": f"{_a(seniority).capitalize()} {seniority} operator currently at {_a(industry)} {industry} leader such as "
                                    f"{', '.join(targets[:3]) or 'a market peer'}, who has shipped outcomes using "
                                    f"{', '.join(must[:4]) or 'the required stack'} and wants a broader remit.",
         "selling_points": ["Scope and ownership of a high-impact mandate", f"Exposure to {industry.lower()} growth",
