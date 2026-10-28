@@ -52,7 +52,7 @@ INDUSTRY_KEYWORDS = {
     "Banking & Financial Services": ["bank", "wealth", "asset management", "insurance", "capital markets"],
     "E-commerce & Marketplaces": ["e-commerce", "ecommerce", "marketplace", "retail", "merchant", "logistics"],
     "AI & Machine Learning": ["artificial intelligence", "machine learning", "llm", "generative ai", " ai "],
-    "Enterprise SaaS": ["saas", "b2b", "enterprise software", "platform", "subscription"],
+    "Enterprise SaaS": ["saas", "b2b", "enterprise software", "subscription"],
     "Consumer Internet": ["consumer", "social", "gaming", "media", "streaming", "superapp", "super app", "mobility", "ride-hailing", "deliveries"],
     "Healthcare & Life Sciences": ["health", "clinical", "pharma", "biotech", "medical", "patient"],
     "Crypto & Web3": ["crypto", "blockchain", "web3", "defi", "token"],

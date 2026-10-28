@@ -1,4 +1,4 @@
-import { CheckCircle2, KeyRound, Loader2, Save } from "lucide-react";
+import { CheckCircle2, KeyRound, Loader2, Save, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Badge, Card } from "../components/ui";
@@ -27,6 +27,11 @@ export default function Settings({ onSaved }: { onSaved: (s: Status) => void }) 
     onSaved(s); setCurrent(await api.settings()); setVals({}); setBusy(false); setOk(true); setTimeout(() => setOk(false), 2000);
   }
 
+  async function remove(key: string) {
+    setBusy(true);
+    onSaved(await api.saveSettings({ [key]: "" })); setCurrent(await api.settings()); setBusy(false);
+  }
+
   return (
     <div className="p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
       <div><h1 className="text-2xl font-semibold text-slate-900">Integrations</h1><p className="text-sm text-slate-500 mt-1">Keys are stored locally on the server (data/settings.json) and never sent to the browser.</p></div>
@@ -35,7 +40,8 @@ export default function Settings({ onSaved }: { onSaved: (s: Status) => void }) 
           <p className="text-sm text-slate-500 mb-4">{g.desc}</p>
           <div className="grid sm:grid-cols-2 gap-4">{g.fields.map((f) => (
             <div key={f.key}>
-              <div className="label flex items-center justify-between">{f.label}{f.secret && current[f.key] === true && <Badge tone="green"><CheckCircle2 className="h-3 w-3" />Connected</Badge>}</div>
+              <div className="label flex items-center justify-between">{f.label}{f.secret && current[f.key] === true && <span className="flex items-center gap-1.5"><Badge tone="green"><CheckCircle2 className="h-3 w-3" />Connected</Badge><button type="button" className="text-xs text-slate-400 hover:text-red-600 inline-flex items-center gap-0.5" disabled={busy} onClick={() => remove(f.key)} title="Remove saved key"><X className="h-3 w-3" />Remove</button></span>}
+                {!f.secret && current[f.key] && <button type="button" className="text-xs text-slate-400 hover:text-red-600 inline-flex items-center gap-0.5" disabled={busy} onClick={() => remove(f.key)} title="Reset to default"><X className="h-3 w-3" />Reset</button>}</div>
               <input className="input" type={f.secret ? "password" : "text"} placeholder={f.secret ? (current[f.key] ? "•••••••• (saved)" : "Paste key") : (String(current[f.key] || "") || f.placeholder)} value={vals[f.key] ?? ""} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })} />
             </div>
           ))}</div>

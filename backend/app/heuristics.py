@@ -16,6 +16,17 @@ def _skill_regex(skill: str) -> re.Pattern:
 SKILL_PATTERNS = [(s, cat, _skill_regex(s)) for s, cat in ALL_SKILLS]
 
 
+BOILERPLATE = re.compile(
+    r"salary|compensation|pay range|base pay|on target earnings|\bOTE\b|commission|bonus|equity|benefits|"
+    r"parental leave|vacation|equal opportunity|equal employment|visa sponsorship|reasonable accommodation|"
+    r"privacy (?:notice|policy)|background check|e-verify", re.I)
+
+
+def strip_boilerplate(text: str) -> str:
+    """Drop pay/benefits/EEO lines so they don't leak into skills."""
+    return "\n".join(l for l in text.splitlines() if not BOILERPLATE.search(l))
+
+
 def find_skills(text: str) -> list[tuple[str, str, int]]:
     out = []
     for s, cat, rx in SKILL_PATTERNS:
@@ -81,8 +92,14 @@ def guess_location(text: str) -> str:
     return counts.most_common(1)[0][0] if counts else ""
 
 
-def guess_industry(text: str) -> str:
-    t = f" {text.lower()} "
+def guess_industry(text: str, company: str = "") -> str:
+    co = company.strip().lower()
+    if co:
+        for ind, companies in INDUSTRY_COMPANIES.items():
+            if any(c.lower() == co for c in companies):
+                return ind
+    about = _section(text, [rf"about {re.escape(company)}" if company else "about us", "about us", "who we are", "about the company"])
+    t = f" {text.lower()} {about.lower() * 3} "
     scores = {ind: sum(t.count(k) for k in keys) for ind, keys in INDUSTRY_KEYWORDS.items()}
     best = max(scores, key=scores.get)
     return best if scores[best] else "Enterprise SaaS"
@@ -134,10 +151,11 @@ def analyze(text: str, hints: dict) -> dict:
     title = hints.get("title") or guess_title(text, hints.get("page_title", ""))
     company = hints.get("company") or guess_company(text, hints.get("site_name", ""), hints.get("host", ""))
     location = hints.get("location") or guess_location(text)
-    industry = guess_industry(text)
+    industry = guess_industry(text, company)
     seniority = seniority_of(title)
-    skills = find_skills(text)
-    req_block = _section(text, ["requirements", "qualifications", "what you(?:'|’)ll need", "what we(?:'|’)re looking for", "must have", "you have", "who you are", "skills"])
+    core = strip_boilerplate(text)
+    skills = find_skills(core)
+    req_block = _section(core, ["requirements", "qualifications", "what you(?:'|’)ll need", "what we(?:'|’)re looking for", "must have", "you have", "who you are", "skills"])
     req_skills = {s for s, _, _ in find_skills(req_block)} if req_block else set()
     ranked = sorted(skills, key=lambda x: (x[0] not in req_skills, -x[2]))
     must = [s for s, _, n in ranked if s in req_skills or n >= 2][:10] or [s for s, _, _ in ranked[:6]]
