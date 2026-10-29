@@ -178,7 +178,11 @@ async def source_candidates(r: Run):
     limit = int(opts.get("max_candidates", 25))
     role, strat = job["role"], job["strategy"]
     cands = []
-    if opts.get("github", True):
+    github = opts.get("github", True)
+    if github and not heuristics.is_technical_role(role):
+        github = False
+        r.log("Skipping GitHub — non-technical role, few candidates have GitHub profiles")
+    if github:
         try:
             kws = [k for k in (strat.get("github_keywords") or role.get("must_have_skills", [])) if k][:2]
             gh = await sourcing.source_github(role.get("must_have_skills", []) + role.get("nice_to_have_skills", []),

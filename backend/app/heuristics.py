@@ -56,6 +56,18 @@ GTM_ROLE = re.compile(r"\b(sales|account (?:director|executive|manager)|business
 REGION_SUFFIX = re.compile(r"\s*[-–—,(|]\s*(?:apac|emea|amer|americas|anz|sea|asia(?: pacific)?|europe|latam|north america|japan|india|global|remote)\b.*$", re.I)
 
 
+TECH_ROLE = re.compile(r"\b(engineer\w*|developer|software|data|machine learning|ml|ai|devops|sre|architect\w*|scientist|security"
+                       r"|technical|solutions?|cloud|platform|infrastructure|programm\w*|full[- ]?stack|front[- ]?end|back[- ]?end"
+                       r"|mobile|python|java\w*|golang|kubernetes|cto)\b", re.I)
+
+
+def is_technical_role(role: dict) -> bool:
+    """GitHub is only a useful channel for engineering, technical and go-to-market roles."""
+    title = role.get("title", "")
+    skills = " ".join(role.get("must_have_skills", []))
+    return bool(TECH_ROLE.search(f"{title} {skills}") or GTM_ROLE.search(title))
+
+
 def seniority_of(title: str) -> str:
     t = f" {title.lower()} "
     if SALES_IC.search(t) and not re.search(r"\b(head|vp|vice president|chief)\b", t):
