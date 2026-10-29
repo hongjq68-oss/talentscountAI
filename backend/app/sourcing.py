@@ -77,6 +77,7 @@ def parse_linkedin_result(res: dict) -> dict | None:
     url = res["url"].split("?")[0]
     if "linkedin.com/in/" not in url:
         return None
+    url = re.sub(r"^https?://(?:[a-z]{2,3}\.)?linkedin\.com", "https://www.linkedin.com", url)
     title = re.sub(r"[\u200b-\u200f\u202a-\u202e]", "", res["title"])
     title = re.sub(r"\s*\|\s*LinkedIn.*$", "", title).strip()
     parts = [p.strip() for p in re.split(r"\s[-–—|]\s", title) if p.strip()]

@@ -6,7 +6,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, STAGES } from "../api";
-import CandidateDrawer, { SourceIcon } from "../components/CandidateDrawer";
+import CandidateDrawer, { ProfileLink, SourceIcon } from "../components/CandidateDrawer";
 import { Avatar, Badge, Card, CopyButton, Empty, GithubIcon, LinkedinIcon, List, ScoreRing, Tabs, tierTone } from "../components/ui";
 import type { Candidate, Job } from "../types";
 
@@ -336,7 +336,7 @@ function CandidatesView({ job, onOpen, onPatch, reload }: { job: Job; onOpen: (i
                     <div className="flex items-center gap-3">
                       <Avatar name={c.name} src={c.avatar} />
                       <div className="min-w-0">
-                        <div className="font-medium text-slate-900">{c.name}</div>
+                        <div className="font-medium text-slate-900 flex items-center gap-1">{c.name}<ProfileLink c={c} /></div>
                         <div className="text-xs text-slate-500 truncate max-w-xs">{c.headline || c.company || "—"}</div>
                         <div className="text-xs text-slate-400 flex gap-3">{c.company && <span>{c.company}</span>}{c.location && <span>{c.location}</span>}</div>
                       </div>
@@ -400,7 +400,7 @@ function Pipeline({ job, onOpen, onPatch }: { job: Job; onOpen: (id: string) => 
                   <div className="flex items-center gap-2.5">
                     <Avatar name={c.name} src={c.avatar} size={30} />
                     <div className="min-w-0 flex-1"><div className="text-sm font-medium truncate">{c.name}</div><div className="text-xs text-slate-500 truncate">{c.company || c.headline}</div></div>
-                    <span className={clsx("text-xs font-semibold", c.score >= 70 ? "text-emerald-600" : c.score >= 45 ? "text-amber-600" : "text-slate-400")}>{c.score}</span>
+                    <ProfileLink c={c} /><span className={clsx("text-xs font-semibold", c.score >= 70 ? "text-emerald-600" : c.score >= 45 ? "text-amber-600" : "text-slate-400")}>{c.score}</span>
                   </div>
                   <div className="flex items-center gap-1.5 mt-2"><SourceIcon source={c.source} />{c.skills.slice(0, 2).map((k) => <Badge key={k} className="!text-[10px]">{k}</Badge>)}</div>
                 </div>
