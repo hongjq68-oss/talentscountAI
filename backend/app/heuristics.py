@@ -149,9 +149,16 @@ def _bullets(block: str, limit: int = 8) -> list[str]:
     return items[:limit]
 
 
+def search_title(title: str) -> str:
+    """Short, searchable form of a job title (drops region, team and 'to the X unit' qualifiers)."""
+    t = REGION_SUFFIX.sub("", title).strip() or title
+    t = re.split(r"\s+(?:to|for|within|at)\s+(?:the\s+)?|\s[-–—|]\s|\s*[(,]", t)[0].strip()
+    return t or title
+
+
 def peer_titles(title: str, seniority: str) -> list[str]:
     region = REGION_SUFFIX.search(title)
-    title = REGION_SUFFIX.sub("", title).strip() or title
+    title = search_title(title)
     if GTM_ROLE.search(title) and seniority in ("Senior IC", "Manager / Lead", "Mid-level IC"):
         sfx = f" ({region.group(0).strip(' -–—,(|')})" if region else ""
         return [title + sfx, "Enterprise Account Executive", "Strategic Account Director", "Enterprise Account Manager",
@@ -306,13 +313,15 @@ def _or(items: list[str], n: int) -> str:
 
 def build_strategy(role: dict, tmap: dict) -> dict:
     must, nice = role.get("must_have_skills", []), role.get("nice_to_have_skills", [])
-    titles = tmap.get("peer_titles") or [role["title"]]
-    companies = [c["name"] for c in tmap.get("target_companies", [])]
+    titles = list(dict.fromkeys(search_title(t) for t in (tmap.get("peer_titles") or [role["title"]])))
+    tiers = tmap.get("target_companies", [])
+    ranked = [c for c in tiers if c.get("tier") == "Primary"][:3] + [c for c in tiers if c.get("tier") != "Primary"]
+    companies = list(dict.fromkeys(re.sub(r"\s*\(.*\)", "", c["name"]).replace(" Copilot", "") for c in ranked or tiers))
     loc = role.get("location", "")
     loc = "" if loc.lower() in ("not specified", "remote", "global") else loc
     loc_q = f' "{loc}"' if loc else ""
     li = " AND ".join(x for x in [_or(titles, 4), _or(must, 4), _or(companies, 6)] if x)
-    xray = f"site:linkedin.com/in {_or(titles, 3)} {_or(must, 3)}{loc_q} -jobs -hiring"
+    xray = f"site:linkedin.com/in {_or(titles, 2)} {_or(must, 2)}{loc_q} -jobs"
     return {
         "skills_matrix": [{"skill": s, "category": "Core", "importance": "Must-have", "signal": "Recent role responsibilities, projects, GitHub repos"} for s in must]
         + [{"skill": s, "category": "Supporting", "importance": "Nice-to-have", "signal": "Profile keywords, certifications, side projects"} for s in nice[:6]],
@@ -327,12 +336,10 @@ def build_strategy(role: dict, tmap: dict) -> dict:
             "google_xray": xray,
             "github": f"{'language:' + must[0].lower() if must else ''}{' location:' + chr(34) + loc + chr(34) if loc else ''} followers:>20".strip(),
         },
-        "xray_queries": [
-            xray,
-            f"site:linkedin.com/in {_or(titles, 2)} {_or(companies[:5], 5)}{loc_q}",
-            f"({_or(titles, 2)}) {_or(must, 3)}{loc_q} (resume OR cv OR portfolio OR \"about me\") -jobs -job",
-            f"{_or(titles, 2)} {_or(companies[:4], 4)}{loc_q} (speaker OR panelist OR podcast OR interview) -jobs",
-        ],
+        # one title per query, no OR/minus operators: search APIs (e.g. DuckDuckGo via SerpAPI) drop complex site: queries
+        "xray_queries": [f'site:linkedin.com/in "{t}" {loc}'.strip() for t in titles[:2]]
+        + [f'site:linkedin.com/in "{titles[0]}" "{c}" {loc}'.strip() for c in companies[:2]]
+        + [f"{_or(titles, 2)} {_or(companies[:4], 4)}{loc_q} (speaker OR panelist OR podcast OR interview) -jobs -hiring"],
         "outreach_template": (
             f"Hi {{first_name}},\n\nI'm working with {role.get('company')} on a {role['title']} mandate{(' in ' + loc) if loc else ''}. "
             f"Your work on {{hook}} stood out — particularly your experience with {', '.join(must[:2]) or 'this space'}.\n\n"

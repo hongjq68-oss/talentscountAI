@@ -106,17 +106,18 @@ async def run_pipeline(job_id: str, raw: dict):
         team_benchmark = []
         if sourcing.search_provider() and company:
             try:
-                titles = (base["talent_map"].get("peer_titles") or [job["role"]["title"]])[:3]
-                q = f'site:linkedin.com/in "{company}" ' + "(" + " OR ".join(f'"{t}"' for t in titles) + ")"
+                titles = list(dict.fromkeys(heuristics.search_title(t) for t in (base["talent_map"].get("peer_titles") or [job["role"]["title"]])))[:3]
+                q = f'site:linkedin.com/in "{company}" "{titles[0]}"'
                 res = await sourcing.web_search(q, 10)
                 team_benchmark = [c for c in (sourcing.parse_linkedin_result(x) for x in res) if c]
                 r.log(f"Benchmarked {len(team_benchmark)} current {company} profiles in similar roles")
             except Exception as e:  # noqa: BLE001
                 r.log(f"Team benchmark search failed: {e}")
         tmap = base["talent_map"]
-        if sourcing.search_provider() and company:
+        basis = tmap["hiring_company_profile"].get("competitor_basis", "")
+        if sourcing.search_provider() and company and not basis.startswith(("Known", "Detected")):
             try:
-                web = await _web_competitors(company)
+                web = await _web_competitors(company, job["role"].get("industry", ""))
                 if len(web) >= 3:
                     _set_primary(tmap, web, f"Named as a {company} competitor / alternative in web results")
                     r.log(f"Web search found direct competitors of {company}: {', '.join(web[:6])}")
@@ -301,8 +302,8 @@ def _known_companies() -> set[str]:
             | {c for cs in COMPANY_COMPETITORS.values() for c in cs})
 
 
-async def _web_competitors(company: str) -> list[str]:
-    res = await sourcing.web_search(f'"{company}" competitors OR alternatives', 10)
+async def _web_competitors(company: str, industry: str = "") -> list[str]:
+    res = await sourcing.web_search(f'"{company}" {industry if industry != "General business" else ""} competitors OR alternatives', 10)
     blob = " ".join(f"{x.get('title', '')} {x.get('snippet', '')}" for x in res)
     counts = {}
     for c in _known_companies():
