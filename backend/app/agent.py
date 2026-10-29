@@ -4,7 +4,8 @@ import re
 import traceback
 from datetime import datetime, timezone
 
-from . import heuristics, llm, sourcing
+from . import heuristics, llm, refine, sourcing
+from .knowledge import COMPANY_COMPETITORS, INDUSTRY_COMPANIES, MARKET_SEGMENTS
 from .store import load_job, save_job
 
 STEPS = [
@@ -12,7 +13,7 @@ STEPS = [
     ("analyze", "Executive recruiter intake & role analysis"),
     ("talent_map", "Talent mapping of hiring firm & market"),
     ("strategy", "Skills matrix & sourcing strategy"),
-    ("sourcing", "Searching GitHub, LinkedIn & open web"),
+    ("sourcing", "Searching GitHub & open web (public LinkedIn profiles)"),
     ("scoring", "Scoring & shortlisting candidates"),
 ]
 
@@ -83,8 +84,10 @@ async def run_pipeline(job_id: str, raw: dict):
                 job["role"] = {**base["role"], **(a.get("role") or {})}
                 job["recruiter_brief"] = {**base["recruiter_brief"], **(a.get("recruiter_brief") or {})}
             except Exception as e:  # noqa: BLE001
-                r.log(f"LLM analysis failed, using heuristic analysis: {e}")
+                r.log(f"LLM analysis failed, using heuristic analysis for this run: {e}")
                 job["role"], job["recruiter_brief"] = base["role"], base["recruiter_brief"]
+                use_llm = False
+                job["mode"] = "Heuristic (LLM error)"
         else:
             job["role"], job["recruiter_brief"] = base["role"], base["recruiter_brief"]
         r.log(f"Role identified: {job['role'].get('title')} @ {job['role'].get('company')} ({job['role'].get('seniority')})")
@@ -103,18 +106,29 @@ async def run_pipeline(job_id: str, raw: dict):
         team_benchmark = []
         if sourcing.search_provider() and company:
             try:
-                titles = (base["talent_map"].get("peer_titles") or [job["role"]["title"]])[:3]
-                q = f'site:linkedin.com/in "{company}" ' + "(" + " OR ".join(f'"{t}"' for t in titles) + ")"
+                titles = list(dict.fromkeys(heuristics.search_title(t) for t in (base["talent_map"].get("peer_titles") or [job["role"]["title"]])))[:3]
+                q = f'site:linkedin.com/in "{company}" "{titles[0]}"'
                 res = await sourcing.web_search(q, 10)
                 team_benchmark = [c for c in (sourcing.parse_linkedin_result(x) for x in res) if c]
                 r.log(f"Benchmarked {len(team_benchmark)} current {company} profiles in similar roles")
             except Exception as e:  # noqa: BLE001
                 r.log(f"Team benchmark search failed: {e}")
         tmap = base["talent_map"]
+        basis = tmap["hiring_company_profile"].get("competitor_basis", "")
+        if sourcing.search_provider() and company and not basis.startswith(("Known", "Detected")):
+            try:
+                web = await _web_competitors(company, job["role"].get("industry", ""))
+                if len(web) >= 3:
+                    _set_primary(tmap, web, f"Named as a {company} competitor / alternative in web results")
+                    r.log(f"Web search found direct competitors of {company}: {', '.join(web[:6])}")
+            except Exception as e:  # noqa: BLE001
+                r.log(f"Competitor web search failed: {e}")
         if use_llm:
             try:
+                job["talent_map_hint"] = {k: tmap["hiring_company_profile"].get(k) for k in ("market_segment", "direct_competitors")}
                 t = await llm.complete_json(RECRUITER_SYSTEM, _talent_map_prompt(job, footprint, team_benchmark), 5000)
-                tmap = {**tmap, **t}
+                job.pop("talent_map_hint", None)
+                tmap = {**tmap, **t, "hiring_company_profile": {**tmap.get("hiring_company_profile", {}), **(t.get("hiring_company_profile") or {})}}
             except Exception as e:  # noqa: BLE001
                 r.log(f"LLM talent mapping failed, using heuristic map: {e}")
         tmap["github_footprint"] = footprint
@@ -164,7 +178,11 @@ async def source_candidates(r: Run):
     limit = int(opts.get("max_candidates", 25))
     role, strat = job["role"], job["strategy"]
     cands = []
-    if opts.get("github", True):
+    github = opts.get("github", True)
+    if github and not heuristics.is_technical_role(role):
+        github = False
+        r.log("Skipping GitHub — non-technical role, few candidates have GitHub profiles")
+    if github:
         try:
             kws = [k for k in (strat.get("github_keywords") or role.get("must_have_skills", [])) if k][:2]
             gh = await sourcing.source_github(role.get("must_have_skills", []) + role.get("nice_to_have_skills", []),
@@ -172,11 +190,67 @@ async def source_candidates(r: Run):
             cands += gh
         except Exception as e:  # noqa: BLE001
             r.log(f"GitHub sourcing failed: {e}")
-    if opts.get("linkedin", True) or opts.get("open_web", True):
-        cands += await sourcing.source_web(strat.get("xray_queries", []), opts.get("linkedin", True), opts.get("open_web", True), limit, r.log)
-    existing = {c["url"] for c in job["candidates"]}
-    job["candidates"] += [c for c in cands if c["url"] not in existing]
-    r.log(f"Sourced {len(cands)} raw profiles")
+    existing = {c["url"] for c in job["candidates"]} | {sourcing.name_key(c["name"]) for c in job["candidates"]}
+    rnd = len(job.get("refinement", {}).get("rounds", []))
+    new, dropped = [], 0
+    for c in cands:
+        if c["url"] in existing or sourcing.name_key(c["name"]) in existing:
+            continue
+        if not refine.relevant(c, job):
+            dropped += 1
+            continue
+        existing.update((c["url"], sourcing.name_key(c["name"])))
+        new.append(c)
+    if dropped:
+        r.log(f"GitHub: dropped {dropped} profiles outside the role's function or from excluded companies")
+    if opts.get("linkedin", False) or opts.get("open_web", True):
+        target = limit if not job["candidates"] else min(limit, 12)
+        if target - len(new) > 0:
+            new += await sourcing.source_web(sourcing.plan_queries(job), target - len(new), r.log, keep=lambda c: refine.relevant(c, job),
+                                             seen=existing, done=job.setdefault("search_log", {}))
+        else:
+            r.log("Enough relevant profiles already — skipped web searches")
+    for c in new:
+        c["round"] = rnd
+    job["candidates"] += new
+    job["last_added"] = len(new)
+    r.log(f"Added {len(new)} new relevant candidates")
+    r.save()
+
+
+async def run_refinement(job_id: str, feedback: str, adj: dict, use_signals: bool, parsed_by: str):
+    r = Run(load_job(job_id))
+    job = r.job
+    try:
+        sig = refine.signals(job) if use_signals else None
+        changes = refine.apply(job, adj, sig)
+        rounds = job["refinement"]["rounds"]
+        n = len(rounds) + 1
+        r.log(f"Refinement round {n}: " + ("; ".join(changes) or "no strategy changes — re-sourcing"))
+        r.step("strategy", "running")
+        refine.refine_strategy(job, adj)
+        r.step("strategy", "done")
+        excluded = 0
+        for c in job["candidates"]:
+            if refine.is_excluded(c, job) and not c.get("stage_manual") and c["stage"] in ("Sourced", "Shortlisted"):
+                c["stage"], c["excluded"] = "Rejected", True
+                excluded += 1
+        entry = {"round": n, "t": now(), "feedback": feedback, "parsed_by": parsed_by, "changes": changes,
+                 "signals": sig, "added": 0, "excluded": excluded, "shortlisted_new": 0}
+        rounds.append(entry)
+        r.step("sourcing", "running")
+        await source_candidates(r)
+        r.step("sourcing", "done")
+        entry["added"] = job.pop("last_added", 0)
+        r.step("scoring", "running")
+        await score_candidates(r, llm.provider() is not None)
+        r.step("scoring", "done")
+        entry["shortlisted_new"] = sum(1 for c in job["candidates"] if c.get("round") == n and c["stage"] == "Shortlisted")
+        r.log(f"Refinement round {n} complete — {entry['added']} new candidates, {entry['shortlisted_new']} newly shortlisted")
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        r.log(f"Refinement failed: {e}")
+    job["status"] = "complete"
     r.save()
 
 
@@ -205,26 +279,39 @@ def heuristic_score(c: dict, job: dict) -> dict:
             val = {"Primary": 20, "Secondary": 14}.get(t.get("tier"), 8)
             if val > comp_score:
                 comp_score, comp_match = val, t["name"]
+    avoided = [a for a in (job.get("refinement") or {}).get("avoid_companies", []) if _norm(a).strip() and _norm(a).strip() in cc]
+    if avoided:
+        comp_score -= 10
     loc = (role.get("location") or "").split(",")[0].strip().lower()
     loc_score = 10 if loc and loc not in ("not specified", "remote") and loc in (c.get("location", "") + " " + c.get("summary", "")).lower() else (5 if not loc or loc in ("not specified", "remote") else 0)
     gh = c.get("github") or {}
     signals = min(10, (gh.get("followers", 0) ** 0.5) / 4 + (gh.get("stars", 0) ** 0.5) / 6 + (2 if gh.get("hireable") else 0)) if gh else (6 if c["source"] == "LinkedIn" else 3)
-    total = round(skills + title + comp_score + loc_score + signals)
+    inds = role.get("target_industries", [])
+    raw = refine._fold(" ".join([c.get("headline", ""), c.get("company", ""), c.get("summary", "")]))
+    ind_hit = next((t for t in heuristics.industry_terms(inds) if re.search(rf"(?<![a-z]){re.escape(refine._fold(t))}", raw)), "")
+    ind_score = 10 if ind_hit else 0
+    total = max(0, round(skills + title + comp_score + loc_score + signals + ind_score))
     strengths = []
     if m_hit:
         strengths.append(f"Matches must-haves: {', '.join(m_hit[:5])}")
     if comp_match:
         strengths.append(f"From target company {comp_match}")
+    if ind_hit:
+        strengths.append(f"Industry background: {ind_hit}")
     if gh.get("stars", 0) > 100:
         strengths.append(f"Strong open-source signal ({gh['stars']} stars)")
     concerns = []
     missing = [s for s in must if s not in m_hit][:4]
     if missing:
         concerns.append(f"No visible evidence of: {', '.join(missing)}")
+    if inds and not ind_hit:
+        concerns.append(f"No visible {', '.join(inds[:3])} background")
     if loc_score == 0 and loc:
         concerns.append("Location may not match")
+    if avoided:
+        concerns.append(f"Similar background to candidates you rejected ({avoided[0]})")
     return {"score": min(100, total), "breakdown": {"Skills": round(skills), "Title/Seniority": round(title), "Company": comp_score,
-            "Location": loc_score, "Signals": round(signals)}, "skills": m_hit + n_hit, "strengths": strengths, "concerns": concerns}
+            "Location": loc_score, "Signals": round(signals), **({"Industry": ind_score} if inds else {})}, "skills": m_hit + n_hit, "strengths": strengths, "concerns": concerns}
 
 
 async def score_candidates(r: Run, use_llm: bool):
@@ -257,7 +344,7 @@ async def score_candidates(r: Run, use_llm: bool):
     threshold = int(job["options"].get("shortlist_threshold", 55 if use_llm else 20))
     n_short = int(job["options"].get("shortlist_size", 10))
     for i, c in enumerate(job["candidates"]):
-        if c["stage"] in ("Sourced", "Shortlisted"):
+        if c["stage"] in ("Sourced", "Shortlisted") and not c.get("stage_manual"):
             c["stage"] = "Shortlisted" if (i < n_short and c["score"] >= threshold) else "Sourced"
         if not c.get("rationale"):
             c["rationale"] = "; ".join(c["strengths"]) or "Partial match — review manually."
@@ -283,19 +370,43 @@ Return JSON:
 }}"""
 
 
+def _known_companies() -> set[str]:
+    return ({c for _, _, ps in MARKET_SEGMENTS for c in ps} | {c for cs in INDUSTRY_COMPANIES.values() for c in cs}
+            | {c for cs in COMPANY_COMPETITORS.values() for c in cs})
+
+
+async def _web_competitors(company: str, industry: str = "") -> list[str]:
+    res = await sourcing.web_search(f'"{company}" {industry if industry != "General business" else ""} competitors OR alternatives', 10)
+    blob = " ".join(f"{x.get('title', '')} {x.get('snippet', '')}" for x in res)
+    counts = {}
+    for c in _known_companies():
+        names = [re.sub(r"\s*\(.*\)", "", c)] + re.findall(r"\((.*?)\)", c)
+        n = sum(len(re.findall(rf"(?<![A-Za-z0-9]){re.escape(x)}(?![A-Za-z0-9])", blob)) for x in names)
+        if n and not heuristics._same_co(c, company):
+            counts[c] = n
+    return sorted(counts, key=lambda c: -counts[c])[:8]
+
+
+def _set_primary(tmap: dict, comps: list[str], why: str):
+    rest = [t for t in tmap["target_companies"] if t["tier"] != "Primary" and t["name"] not in comps]
+    tmap["target_companies"] = [{"name": c, "tier": "Primary", "rationale": why} for c in comps[:6]] + rest
+    tmap["hiring_company_profile"].update(direct_competitors=comps[:6], competitor_basis=why)
+
+
 def _talent_map_prompt(job: dict, footprint, bench) -> str:
     role = job["role"]
     return f"""Build a talent map for this search. Start from the HIRING FIRM ({role.get('company')}): what kind of people it hires
 for this role today, where they come from, then map the external market.
 
 ROLE: {json.dumps({k: role.get(k) for k in ('title','company','location','seniority','industry','function','must_have_skills','nice_to_have_skills','years_experience')})}
+DIRECT COMPETITOR HINTS (keyword/web based, verify and correct): {json.dumps((job.get('talent_map_hint') or {}))}
 HIRING FIRM PUBLIC GITHUB FOOTPRINT: {json.dumps(footprint) if footprint else 'unknown'}
 CURRENT PROFILES AT HIRING FIRM IN SIMILAR ROLES (from web search): {json.dumps([{'name': b['name'], 'headline': b['headline'], 'snippet': b['summary'][:200]} for b in bench][:10]) if bench else 'not available'}
 
 Return JSON:
 {{
- "hiring_company_profile": {{"name": str, "description": str, "culture_signals": [str], "current_team_patterns": [str] (4-6 observations about background, prior employers, education, tenure of people in similar roles at this firm)}},
- "target_companies": [{{"name": str, "tier": "Primary"|"Secondary"|"Adjacent", "rationale": str, "est_talent_pool": str}}] (12-16 real companies, local to the location where relevant),
+ "hiring_company_profile": {{"name": str, "description": str, "market_segment": str (what it sells, e.g. "AI coding agents"), "direct_competitors": [str], "competitor_basis": str, "culture_signals": [str], "current_team_patterns": [str] (4-6 observations about background, prior employers, education, tenure of people in similar roles at this firm)}},
+ "target_companies": [{{"name": str, "tier": "Primary"|"Secondary"|"Adjacent", "rationale": str, "est_talent_pool": str}}] (12-16 real companies, local to the location where relevant). Primary = 5-6 DIRECT competitors of the hiring firm: companies selling a similar product to the same customers (e.g. for an AI coding-agent company: Cursor, GitHub Copilot, Replit - not generic AI labs). Secondary = companies with the same role and talent profile. Adjacent = transferable pools,
  "peer_titles": [str] (5-8 equivalent titles used across target companies),
  "talent_hubs": [{{"location": str, "rationale": str}}] (2-4),
  "market_trends": [{{"trend": str, "implication": str}}] (4-6, current hiring-market trends for this role),

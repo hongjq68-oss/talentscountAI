@@ -33,7 +33,7 @@ export default function Dashboard({ listOnly = false }: { listOnly?: boolean }) 
 
       {!listOnly && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <Kpi icon={<Briefcase className="h-5 w-5" />} label="Active searches" value={jobs?.length ?? 0} tone="bg-brand-50 text-brand-600" />
+          <Kpi icon={<Briefcase className="h-5 w-5" />} label="Searches" value={jobs?.length ?? 0} tone="bg-brand-50 text-brand-600" />
           <Kpi icon={<Users className="h-5 w-5" />} label="Candidates sourced" value={total} tone="bg-violet-50 text-violet-600" />
           <Kpi icon={<Star className="h-5 w-5" />} label="Shortlisted" value={shortlisted} tone="bg-amber-50 text-amber-600" />
           <Kpi icon={<Target className="h-5 w-5" />} label="In process" value={pipeline} tone="bg-emerald-50 text-emerald-600" />

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import csv
 import io
 import uuid
@@ -10,7 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agent, ingest, llm, sourcing, store
+from . import agent, ingest, llm, refine, sourcing, store
 
 app = FastAPI(title="Talent Sourcing Agent")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -60,7 +61,7 @@ def jobs():
 async def create_job(
     background: BackgroundTasks,
     url: str = Form(""), text: str = Form(""), company: str = Form(""), location: str = Form(""),
-    github: bool = Form(True), linkedin: bool = Form(True), open_web: bool = Form(True),
+    github: bool = Form(True), linkedin: bool = Form(False), open_web: bool = Form(True),
     max_candidates: int = Form(25), file: UploadFile | None = File(None),
 ):
     raw = {"company": company.strip(), "location": location.strip()}
@@ -76,7 +77,7 @@ async def create_job(
             page = await ingest.fetch_url(url.strip())
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"Could not fetch URL ({e}). Some job boards block bots — paste the JD text instead.")
-        raw.update(page)
+        raw.update({k: v for k, v in page.items() if v and not raw.get(k)})
         source = {"type": "link", "label": url.strip()}
     elif text.strip():
         raw["text"] = text.strip()
@@ -120,6 +121,8 @@ def patch_candidate(job_id: str, cid: str, body: CandidatePatch):
             for k, v in body.model_dump(exclude_none=True).items():
                 if k == "stage" and v not in STAGES:
                     raise HTTPException(400, "bad stage")
+                if k == "stage":
+                    c["stage_manual"], c["excluded"] = True, False
                 c[k] = v
             store.save_job(j)
             return c
@@ -171,6 +174,46 @@ async def resource(job_id: str, background: BackgroundTasks):
     return {"ok": True}
 
 
+class RefineIn(BaseModel):
+    feedback: str = ""
+    adjustments: dict | None = None
+    use_signals: bool = True
+
+
+@app.post("/api/jobs/{job_id}/refine/preview")
+async def refine_preview(job_id: str, body: RefineIn):
+    j = store.load_job(job_id)
+    if not j or not j.get("role"):
+        raise HTTPException(404)
+    if body.adjustments is None:
+        adj, how = await refine.parse(body.feedback, j, agent._known_companies(), agent.RECRUITER_SYSTEM)
+    else:
+        adj, how = refine._dedupe({**refine.empty(), **body.adjustments}), "recruiter"
+    sig = refine.signals(j)
+    sim = copy.deepcopy(j)  # dry run: what the next round would search, without spending credits
+    changes = refine.apply(sim, adj, sig if body.use_signals else None)
+    refine.refine_strategy(sim, adj)
+    plan = sourcing.plan_queries(sim)
+    cost = sum(not p["cached"] for p in plan) if sourcing.search_provider() else 0
+    return {"adjustments": adj, "parsed_by": how, "signals": sig, "changes": changes, "plan": plan, "cost": cost,
+            "warnings": refine.warnings(sim, plan)}
+
+
+@app.post("/api/jobs/{job_id}/refine")
+async def refine_job(job_id: str, body: RefineIn, background: BackgroundTasks):
+    j = store.load_job(job_id)
+    if not j or not j.get("role") or j["status"] == "running":
+        raise HTTPException(400, "Job not found or still running")
+    if body.adjustments is None:
+        adj, how = await refine.parse(body.feedback, j, agent._known_companies(), agent.RECRUITER_SYSTEM)
+    else:
+        adj, how = refine._dedupe({**refine.empty(), **body.adjustments}), "recruiter"
+    j["status"] = "running"
+    store.save_job(j)
+    background.add_task(agent.run_refinement, job_id, body.feedback, adj, body.use_signals, how)
+    return {"ok": True, "adjustments": adj}
+
+
 @app.get("/api/jobs/{job_id}/export.csv")
 def export(job_id: str):
     j = store.load_job(job_id)
@@ -194,4 +237,6 @@ if DIST.exists():
     @app.get("/{path:path}")
     def spa(path: str):
         f = DIST / path
-        return FileResponse(f if path and f.is_file() else DIST / "index.html")
+        if path and f.is_file():
+            return FileResponse(f)
+        return FileResponse(DIST / "index.html", headers={"Cache-Control": "no-cache"})

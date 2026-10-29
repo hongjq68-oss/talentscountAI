@@ -1,6 +1,8 @@
 """Candidate discovery: GitHub API and web/LinkedIn X-ray search via pluggable search APIs."""
 import asyncio
 import re
+import unicodedata
+import time
 import uuid
 from urllib.parse import quote_plus
 
@@ -40,7 +42,7 @@ async def web_search(query: str, num: int = 10) -> list[dict]:
     p = search_provider()
     if not p:
         return []
-    async with httpx.AsyncClient(timeout=30) as c:
+    async with httpx.AsyncClient(timeout=45) as c:
         if p == "serper":
             r = await c.post("https://google.serper.dev/search", headers={"X-API-KEY": get_setting("SERPER_API_KEY")}, json={"q": query, "num": num})
             r.raise_for_status()
@@ -56,7 +58,9 @@ async def web_search(query: str, num: int = 10) -> list[dict]:
             return [{"title": i.get("title", ""), "url": i.get("url", ""), "snippet": re.sub("<.*?>", "", i.get("description", ""))}
                     for i in r.json().get("web", {}).get("results", [])]
         if p == "serpapi":
-            r = await c.get("https://serpapi.com/search.json", params={"q": query, "num": num, "api_key": get_setting("SERPAPI_API_KEY")})
+            r = await c.get("https://serpapi.com/search.json", params={"q": query, "api_key": get_setting("SERPAPI_API_KEY"),
+                                                                       # SerpAPI's Google engine ignores site: filters
+                                                                       **({"engine": "duckduckgo"} if "site:" in query else {"num": num})})
             r.raise_for_status()
             return [{"title": i.get("title", ""), "url": i.get("link", ""), "snippet": i.get("snippet", "")} for i in r.json().get("organic_results", [])]
     return []
@@ -71,19 +75,37 @@ def _new_candidate(**kw) -> dict:
     return base
 
 
+def name_key(n: str) -> str:
+    """Accent/case-insensitive name for de-duplication (Martínez == Martinez)."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", n or "") if not unicodedata.combining(ch)).lower().strip()
+
+
+def company_from(headline: str, snippet: str) -> str:
+    """Employer from local-language profile text, e.g. 'Experiencia: Arkema Química, SA' or 'Director Financiero en Arkema'."""
+    m = re.search(r"(?:Experiencia|Experience|Berufserfahrung|Expérience|Esperienza|Experiência):\s*([^·]{2,50}?)\s*(?:·|$)", snippet or "") \
+        or re.search(r"\s(?:en|at|@|bei|chez|presso|na)\s+([A-Z][\w&.'\- ]{1,40}?)(?:\s*(?:\.\.\.|…|\||·|,)|$)", headline or "")
+    return m.group(1).strip(" .") if m else ""
+
+
 def parse_linkedin_result(res: dict) -> dict | None:
     url = res["url"].split("?")[0]
     if "linkedin.com/in/" not in url:
         return None
-    title = re.sub(r"\s*\|\s*LinkedIn.*$", "", res["title"]).strip()
+    url = re.sub(r"^https?://(?:[a-z]{2,3}\.)?linkedin\.com", "https://www.linkedin.com", url)
+    title = re.sub(r"[\u200b-\u200f\u202a-\u202e]", "", res["title"])
+    title = re.sub(r"\s*\|\s*LinkedIn.*$", "", title).strip()
     parts = [p.strip() for p in re.split(r"\s[-–—|]\s", title) if p.strip()]
     name = parts[0] if parts else title
     headline = parts[1] if len(parts) > 1 else ""
+    if not name or len(name.split()) > 5 or re.search(r"\b(director|directora|financiero|manager|cfo|ceo|coo|head|en|at|bei|chez|linkedin)\b", name, re.I):
+        return None  # title-only results like "Director Financiero en ..." are not a person
     company = parts[2] if len(parts) > 2 else ""
     snippet = res.get("snippet", "")
+    company = company or company_from(headline, snippet)
     if not company:
         m = re.search(r"(?:Experience|at)\s*[:\-]?\s*([A-Z][\w&.\- ]{1,40}?)(?:[·|.,]|\s{2}|$)", snippet)
         company = m.group(1).strip() if m else ""
+    company = "" if company.lower() == "linkedin" else company
     loc = ""
     m = re.search(r"(?:Location|Based in)\s*[:\-]?\s*([A-Z][\w ,]{2,40}?)(?:[·|.]|$)", snippet)
     if m:
@@ -92,39 +114,81 @@ def parse_linkedin_result(res: dict) -> dict | None:
                           url=url, summary=snippet, evidence=snippet)
 
 
+JOB_PAGE = re.compile(r"/jobs?[/-]|/careers?/|linkedin\.com/jobs|indeed\.|glassdoor\.|jobstreet|jobsdb|jobleads|expertini|trabajo|mycareersfuture|monster\.|/vacanc", re.I)
+JOB_TITLE = re.compile(r"\b(jobs?|hiring|vacanc\w*|careers?|apply|salar\w+|recruit\w*)\b", re.I)
+ROLE_WORD = re.compile(r"\b(sales|director|manager|executive|finance|partner|engineer|lead|head|account|enterprise|senior|apac|business|developer|consultant|analyst|officer|vp|chief|president|strategic|regional|global|team|company|group|podcast|episode|webinar|summit|conference|report|news|the|how|why|what)\b", re.I)
+
+
 def parse_web_result(res: dict) -> dict | None:
     url = res["url"]
-    if any(b in url for b in ("linkedin.com/jobs", "indeed.", "glassdoor.", "/jobs/", "/careers")):
-        return None
     title = res["title"]
-    name = re.split(r"\s[-–—|:]\s", title)[0].strip()
-    if len(name.split()) > 5 or len(name) < 3:
+    if JOB_PAGE.search(url) or JOB_TITLE.search(title):
+        return None
+    name = re.split(r"\s[-–—|:,]\s?", title)[0].strip()
+    words = name.split()
+    if not 2 <= len(words) <= 4 or not all(w[:1].isupper() for w in words) or ROLE_WORD.search(name):
         return None
     return _new_candidate(name=name, headline=title[:120], source="Open Web", url=url, summary=res.get("snippet", ""), evidence=res.get("snippet", ""))
 
 
-async def source_web(queries: list[str], linkedin: bool, open_web: bool, limit: int, log) -> list[dict]:
+def plan_queries(job: dict) -> list[dict]:
+    """Searches the next sourcing run would make, LinkedIn X-ray first; `cached` ones were already run for this role and are skipped."""
+    done, opts = job.get("search_log") or {}, job.get("options", {})
+    plan = []
+    for q in dict.fromkeys(job.get("strategy", {}).get("xray_queries", [])):
+        li = "linkedin.com/in" in q
+        if not (opts.get("open_web", True) or (li and opts.get("linkedin"))):
+            continue
+        prev = done.get(q)
+        plan.append({"q": q, "kind": "linkedin" if li else "web", "cached": bool(prev), "kept": (prev or {}).get("kept")})
+    return sorted(plan, key=lambda p: p["kind"] != "linkedin")
+
+
+async def source_web(plan: list[dict], limit: int, log, keep=None, seen: set | None = None, done: dict | None = None) -> list[dict]:
+    """Run planned searches until `limit` relevant new profiles are found. Skips searches already run and drops off-target results."""
     if not search_provider():
-        log("No web-search API key configured — skipping LinkedIn/open-web X-ray (manual search links provided in Strategy tab).")
+        log("No web-search API key configured — skipping open-web search (manual X-ray links provided in Strategy tab).")
         return []
-    out, seen = [], set()
-    for q in queries:
-        is_li = "linkedin.com/in" in q
-        if (is_li and not linkedin) or (not is_li and not open_web):
-            continue
-        try:
-            results = await web_search(q, 10)
-        except Exception as e:  # noqa: BLE001
-            log(f"Search failed for query: {e}")
-            continue
-        log(f"{search_provider()}: {len(results)} results for {'LinkedIn X-ray' if is_li else 'open web'} query")
-        for r in results:
-            c = parse_linkedin_result(r) if "linkedin.com/in/" in r.get("url", "") else (parse_web_result(r) if open_web else None)
-            if c and c["url"] not in seen:
-                seen.add(c["url"])
-                out.append(c)
+    done = {} if done is None else done
+    seen = set() if seen is None else seen
+    cached = [p for p in plan if p["q"] in done]
+    if cached:
+        log(f"Skipped {len(cached)} searches already run for this role (no credits used)")
+    todo = [p["q"] for p in plan if p["q"] not in done]
+    if not todo:
+        log("No new searches to run — change titles, companies or location in Refine to look somewhere new")
+    out = []
+    for i, q in enumerate(todo):
         if len(out) >= limit:
+            log(f"Found {len(out)} relevant new profiles — stopped early, saved {len(todo) - i} searches")
             break
+        is_li = "linkedin.com/in" in q
+        try:
+            try:
+                results = await web_search(q, 10)
+            except httpx.TimeoutException:
+                results = await web_search(q, 10)
+        except Exception as e:  # noqa: BLE001
+            log(f"Search failed for query: {type(e).__name__} {e}")
+            continue
+        kept = dup = off = 0
+        for r in results:
+            c = parse_linkedin_result(r) if "linkedin.com/in/" in r.get("url", "") else parse_web_result(r)
+            if not c:
+                off += 1
+                continue
+            if c["url"] in seen or name_key(c["name"]) in seen:
+                dup += 1
+                continue
+            if keep and not keep(c):
+                off += 1
+                continue
+            seen.update((c["url"], name_key(c["name"])))
+            out.append(c)
+            kept += 1
+        done[q] = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": len(results), "kept": kept}
+        log(f"{search_provider()}: {len(results)} results for {'public LinkedIn profile' if is_li else 'open web'} query — "
+            f"{kept} relevant new" + (f", {dup} already found" if dup else "") + (f", {off} off-target dropped" if off else ""))
     return out[:limit]
 
 
@@ -190,7 +254,7 @@ async def source_github(skills: list[str], location: str, keywords: list[str], l
             langs.append(l)
     loc = "" if not location or location.lower() in ("not specified", "remote", "global") else location.split(",")[0].strip()
     queries = []
-    for l in langs[:2] or [None]:
+    for l in langs[:2]:
         q = " ".join(filter(None, [f"language:{l}" if l else None, f'location:"{loc}"' if loc else None, "followers:>15", "type:user"]))
         if l or loc:
             queries.append(q)

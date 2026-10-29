@@ -10,6 +10,14 @@ export function SourceIcon({ source }: { source: string }) {
   return <ExternalLink className="h-3.5 w-3.5" />;
 }
 
+export function ProfileLink({ c }: { c: Candidate }) {
+  if (!c.url) return null;
+  return (
+    <a href={c.url} target="_blank" rel="noopener noreferrer" title="Open profile in a new tab" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}
+      className="inline-flex items-center justify-center rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-brand-600 shrink-0"><SourceIcon source={c.source} /></a>
+  );
+}
+
 export default function CandidateDrawer({ c, template, onClose, onPatch }: { c: Candidate; template?: string; onClose: () => void; onPatch: (p: Partial<Candidate>) => void }) {
   const [notes, setNotes] = useState(c.notes);
   useEffect(() => setNotes(c.notes), [c.id, c.notes]);
@@ -38,7 +46,7 @@ export default function CandidateDrawer({ c, template, onClose, onPatch }: { c: 
             <select className="input !w-auto !py-1.5" value={c.stage} onChange={(e) => onPatch({ stage: e.target.value })}>
               {STAGES.map((s) => <option key={s}>{s}</option>)}
             </select>
-            <a href={c.url} target="_blank" rel="noreferrer" className="btn-secondary !py-1.5"><ExternalLink className="h-4 w-4" />View profile</a>
+            {c.url && <><a href={c.url} target="_blank" rel="noopener noreferrer" className="btn-secondary !py-1.5"><ExternalLink className="h-4 w-4" />View profile</a><CopyButton text={c.url} label="Copy link" /></>}
             <button className="btn-secondary !py-1.5" onClick={() => onPatch({ stage: "Shortlisted" })}><ThumbsUp className="h-4 w-4" />Shortlist</button>
             <button className="btn-ghost !py-1.5 text-rose-600" onClick={() => onPatch({ stage: "Rejected" })}><ThumbsDown className="h-4 w-4" />Reject</button>
             <div className="ml-auto flex">{[1, 2, 3, 4, 5].map((n) => (
@@ -56,9 +64,9 @@ export default function CandidateDrawer({ c, template, onClose, onPatch }: { c: 
                 <div className="text-sm text-slate-600 mt-0.5">{c.rationale}</div>
               </div>
             </div>
-            <div className="grid grid-cols-5 gap-2 mt-4">
+            <div className="grid grid-cols-6 gap-2 mt-4">
               {Object.entries(c.breakdown || {}).map(([k, v]) => {
-                const maxes: Record<string, number> = { Skills: 40, "Title/Seniority": 20, Company: 20, Location: 10, Signals: 10 };
+                const maxes: Record<string, number> = { Skills: 40, "Title/Seniority": 20, Company: 20, Location: 10, Signals: 10, Industry: 10 };
                 return (
                   <div key={k}>
                     <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden"><div className="h-full bg-brand-500" style={{ width: `${(v / (maxes[k] || 20)) * 100}%` }} /></div>
