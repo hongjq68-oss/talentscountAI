@@ -93,7 +93,8 @@ INDUSTRY_COMPANIES = {
 LOCATIONS = ["Singapore", "Hong Kong", "London", "New York", "San Francisco", "Bay Area", "Seattle", "Austin",
              "Boston", "Toronto", "Sydney", "Melbourne", "Tokyo", "Seoul", "Shanghai", "Beijing", "Shenzhen",
              "Bangalore", "Bengaluru", "Mumbai", "Delhi", "Hyderabad", "Jakarta", "Kuala Lumpur", "Bangkok",
-             "Manila", "Ho Chi Minh", "Dubai", "Berlin", "Paris", "Amsterdam", "Dublin", "Zurich", "Remote"]
+             "Manila", "Ho Chi Minh", "Dubai", "Berlin", "Paris", "Amsterdam", "Dublin", "Zurich", "Barcelona", "Madrid", "Munich", "Frankfurt", "Hamburg",
+             "Milan", "Stockholm", "Copenhagen", "Brussels", "Lisbon", "Vienna", "Warsaw", "Prague", "Geneva", "Basel", "Remote"]
 
 # Product/market segments: what the hiring firm sells -> companies selling the same thing to the same buyers.
 MARKET_SEGMENTS = [

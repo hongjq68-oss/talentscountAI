@@ -1,7 +1,7 @@
 import { History, Loader2, Plus, Sparkles, ThumbsDown, ThumbsUp, Wand2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Adjustments, Job, RefineSignals } from "../types";
+import type { Adjustments, Job, RefinePreview, RefineSignals } from "../types";
 import { Badge, Card, timeAgo } from "./ui";
 
 type ListKey = "include_companies" | "exclude_companies" | "add_skills" | "remove_skills" | "add_titles" | "remove_titles";
@@ -55,7 +55,13 @@ export default function RefinePanel({ job, onStarted, onShowCandidates }: { job:
   const rounds = [...(job.refinement?.rounds || [])].reverse();
   const role = job.role, tmap = job.talent_map;
 
-  useEffect(() => { api.refinePreview(job.id, "").then((r) => setSignals(r.signals)).catch(() => undefined); }, [job.id, job.candidates]);
+  const [plan, setPlan] = useState<RefinePreview | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.refinePreview(job.id, { adjustments: adj, use_signals: useSignals }).then((r) => { setSignals(r.signals); setPlan(r); }).catch(() => undefined);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [job.id, job.candidates, adj, useSignals]);
 
   const merge = (a: Adjustments) => setAdj((cur) => {
     const out = { ...cur };
@@ -69,7 +75,7 @@ export default function RefinePanel({ job, onStarted, onShowCandidates }: { job:
   const interpret = async () => {
     setBusy("interpret"); setErr("");
     try {
-      const r = await api.refinePreview(job.id, feedback);
+      const r = await api.refinePreview(job.id, { feedback });
       merge(r.adjustments); setParsedBy(r.parsed_by); setInterpreted(feedback); setSignals(r.signals);
       return r.adjustments;
     } catch (e) { setErr((e as Error).message); return null; } finally { setBusy(""); }
@@ -80,7 +86,7 @@ export default function RefinePanel({ job, onStarted, onShowCandidates }: { job:
     try {
       let final = adj;
       if (feedback.trim() && feedback !== interpreted) {
-        const r = await api.refinePreview(job.id, feedback);
+        const r = await api.refinePreview(job.id, { feedback });
         final = { ...adj };
         FIELDS.forEach(({ key }) => { final[key] = Array.from(new Set([...adj[key], ...r.adjustments[key]])); });
         final.add_nice = Array.from(new Set([...adj.add_nice, ...r.adjustments.add_nice]));
@@ -141,10 +147,25 @@ export default function RefinePanel({ job, onStarted, onShowCandidates }: { job:
                 </div>
               </div>
             </label>
+            {plan && (
+              <div className="rounded-lg border border-slate-200 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <span className="font-medium text-slate-800">Searches this round</span>
+                  <span className="text-xs text-slate-500">At most {plan.cost} search credit{plan.cost === 1 ? "" : "s"} · stops early once enough relevant people are found</span>
+                </div>
+                <ul className="mt-2 space-y-1">{plan.plan.map((p) => (
+                  <li key={p.q} className="flex gap-2 text-xs" title={p.q}>
+                    <span className={`font-mono truncate ${p.cached ? "text-slate-400 line-through" : "text-slate-700"}`}>{p.q}</span>
+                    {p.cached && <span className="shrink-0 text-slate-400">already run{p.kept != null ? `, ${p.kept} found` : ""}</span>}
+                  </li>
+                ))}</ul>
+                {plan.warnings.map((w) => <div key={w} className="mt-2 text-xs text-amber-700 bg-amber-50 rounded px-2 py-1">{w}</div>)}
+              </div>
+            )}
             {err && <div className="text-sm text-rose-600">{err}</div>}
             <div className="flex items-center gap-3">
               <button className="btn-primary" disabled={running || !!busy || (!hasChanges && !(useSignals && canSignal))} onClick={apply}>
-                {busy === "apply" || running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}{running ? "Refining…" : "Apply & re-source"}
+                {busy === "apply" || running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}{running ? "Refining…" : `Apply & re-source${plan ? ` (≤${plan.cost} searches)` : ""}`}
               </button>
               <span className="text-xs text-slate-500">Updates the strategy, searches again and adds only new people. Your pipeline is kept.</span>
             </div>

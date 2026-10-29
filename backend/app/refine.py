@@ -1,5 +1,6 @@
 """Recruiter feedback loop: turn free-text feedback + candidate signals into strategy adjustments, then re-source."""
 import re
+import unicodedata
 from collections import Counter
 
 from . import heuristics, llm, sourcing
@@ -31,18 +32,23 @@ ALIASES = {
     "big 4": ["Deloitte", "PwC", "EY", "KPMG"], "big four": ["Deloitte", "PwC", "EY", "KPMG"],
     "mbb": ["McKinsey", "BCG", "Bain"], "faang": ["Meta", "Apple", "Amazon", "Netflix", "Google"],
 }
+_CG = ["Unilever", "Procter & Gamble", "Nestlé", "Reckitt", "Colgate-Palmolive", "Mondelez", "Kraft Heinz", "L'Oréal"]
+ALIASES |= {k: _CG for k in ("cg", "fmcg", "cpg", "consumer goods")}
+_PREFIX = re.compile(r"^(?:the|people|candidates|profiles|from|at|in)\s+", re.I)
+_SUFFIX = re.compile(r"\s+(?:experience|backgrounds?|skills?|only|profiles?|candidates?|people)$", re.I)
+_FILLER = re.compile(r"^(?:though|but|although|rather|ideally|which|that|as|so|if|while|unless|e\.?g\.?)\b", re.I)
 
 
 def _items(s: str, protect: set[str] = frozenset()) -> list[str]:
-    s = re.sub(r"^(?:the|people|candidates|profiles|from|at|in)\s+", "", s.strip(" :-\"'"), flags=re.I)
-    s = re.sub(r"\s+(?:experience|background|skills?|only|profiles?|candidates?|people)$", "", s, flags=re.I)
+    s = s.strip(" :-\"'")
     for k in sorted(protect, key=len, reverse=True):
         if re.search(r"\s(?:&|and)\s", k) and k.lower() in s.lower():
             s = re.sub(re.escape(k), k.replace(" ", "\u2063"), s, flags=re.I)
     out = []
     for p in _SPLIT.split(s):
         p = p.strip(" .:\"'").replace("\u2063", " ")
-        if p and len(p) <= 60:
+        p = _SUFFIX.sub("", _PREFIX.sub("", p)).strip()
+        if p and len(p) <= 60 and len(p.split()) <= 5 and not _FILLER.match(p):
             out += ALIASES.get(p.lower(), [p])
     return out
 
@@ -76,6 +82,9 @@ def parse_heuristic(text: str, job: dict, known: set[str]) -> dict:
     protect = set(known) | {c["name"] for c in job.get("talent_map", {}).get("target_companies", [])}
     for kind, pat in RULES:
         for m in re.finditer(rf"\b{pat}\s+(.+?){_END}", t, re.I):
+            if kind == "location":
+                adj["location"] = adj["location"] or heuristics.clean_location(m.group(1))
+                continue
             for x in _items(m.group(1), protect):
                 if kind == "exclude":
                     if x.lower() in {s.lower() for s in skills}:
@@ -94,8 +103,10 @@ def parse_heuristic(text: str, job: dict, known: set[str]) -> dict:
                     adj["add_nice"].append(x)
                 elif kind == "title":
                     adj["add_titles"].append(x)
-                elif kind == "location" and not adj["location"]:
-                    adj["location"] = x
+    for m in re.finditer(r"\b(?:at|as)\s+(?:an?\s+)?((?:[A-Z][\w&/]*\s?){1,4}?)\s+level\b", t):
+        adj["add_titles"].append(m.group(1).strip())
+    for m in re.finditer(r"\b((?:[A-Z][\w&/]*\s?){1,3}?)\s*(?:experience|background)\s+(?:would be|is)\s+(?:an?\s+)?(?:\w+\s+)?(?:advantage|plus|bonus)", t):
+        adj["add_nice"].append(m.group(1).strip())
     if re.search(r"\bmore senior\b|\btoo junior\b", t, re.I):
         adj["seniority"] = "more senior"
     elif re.search(r"\bmore junior\b|\btoo senior\b", t, re.I):
@@ -197,23 +208,35 @@ def apply(job: dict, adj: dict, sig: dict | None) -> list[str]:
         role["nice_to_have_skills"] = list(dict.fromkeys(role.get("nice_to_have_skills", []) + adj["add_nice"]))
         changes.append(f"Nice-to-have skills added: {', '.join(adj['add_nice'])}")
 
+    role_title = role.get("title", "")
     titles = [t for t in tmap.get("peer_titles", []) if t.lower() not in low(adj["remove_titles"])]
     new_titles = list(adj["add_titles"])
     if sig and sig.get("liked_titles"):
         new_titles += [t for t in sig["liked_titles"] if t.lower() not in low(titles + new_titles)]
-    base = heuristics.search_title(role.get("title", ""))
+    base = heuristics.search_title(role_title)
     if adj["seniority"] == "more senior":
         new_titles += [f"Senior {base}", f"Head of {base}" if " " not in base else f"Lead {base}"]
         changes.append("Shifted search towards more senior profiles")
     elif adj["seniority"] == "more junior":
-        titles = [t for t in titles if not re.match(r"(senior|lead|head|principal|director|vp)\b", t, re.I)] or [base]
+        down = heuristics.step_down(role_title)
+        if down:
+            new_titles += [t for t in down if t.lower() not in low(adj["remove_titles"])]
+            titles = [t for t in titles if not re.match(r"(chief|svp|evp|group)\b", t, re.I)]
+        else:
+            titles = [t for t in titles if not re.match(r"(senior|lead|head|principal|director|vp)\b", t, re.I)] or [base]
         changes.append("Shifted search towards less senior profiles")
-    if new_titles or adj["remove_titles"]:
-        tmap["peer_titles"] = list(dict.fromkeys(new_titles + titles))[:8]
-        if new_titles:
-            changes.append(f"Titles added to search: {', '.join(dict.fromkeys(new_titles))}")
-        if adj["remove_titles"]:
-            changes.append(f"Titles removed: {', '.join(adj['remove_titles'])}")
+    merged = list(dict.fromkeys(new_titles + titles))
+    # never search titles from another job function (e.g. "Managing Director" for a CFO search) — they burn credits on off-target profiles
+    off = [t for t in merged if t not in adj["add_titles"] and not heuristics.on_function(t, role_title)]
+    merged = [t for t in merged if t not in off] or [t for t in heuristics.peer_titles(role_title, role.get("seniority", ""))
+                                                     if t.lower() not in low(adj["remove_titles"])][:4] or [base]
+    tmap["peer_titles"] = merged[:8]
+    if new_titles:
+        changes.append(f"Titles added to search: {', '.join(dict.fromkeys(new_titles))}")
+    if adj["remove_titles"]:
+        changes.append(f"Titles removed: {', '.join(adj['remove_titles'])}")
+    if off:
+        changes.append(f"Dropped titles outside the role's function: {', '.join(off)}")
 
     targets = tmap.get("target_companies", [])
     excl = low(adj["exclude_companies"])
@@ -241,18 +264,46 @@ def apply(job: dict, adj: dict, sig: dict | None) -> list[str]:
     else:
         tmap["target_companies"] = targets
 
-    if adj["location"] and adj["location"].lower() != (role.get("location") or "").lower():
-        role["location"] = adj["location"]
-        changes.append(f"Location set to {adj['location']}")
+    loc = heuristics.clean_location(adj["location"]) if adj["location"] else ""
+    if loc and loc.lower() != (role.get("location") or "").lower():
+        role["location"] = loc
+        changes.append(f"Location set to {loc}")
     if sig and sig.get("weak_sources"):
         changes.append(f"Note: you rejected all {', '.join(sig['weak_sources'])} candidates so far — consider turning that channel off")
     return changes
 
 
+def relevant(c: dict, job: dict) -> bool:
+    """Worth adding to the pool: same job function as the role and not from an excluded company."""
+    if is_excluded(c, job):
+        return False
+    title = job["role"].get("title", "")
+    if c.get("source") == "GitHub" and heuristics.role_family(title) in ("", "engineering", "data"):
+        return True
+    return heuristics.on_function(c.get("headline") or c.get("summary", "")[:160], title)
+
+
+def warnings(job: dict, plan: list[dict]) -> list[str]:
+    w = []
+    if plan and all(p["cached"] for p in plan):
+        w.append("Every planned search has already been run for this role, so it would find no one new. Change titles, companies or location.")
+    loc = job["role"].get("location", "")
+    if len(loc.split()) > 3:
+        w.append(f"Location “{loc}” is too long for a search. Use a city or country.")
+    if not sourcing.search_provider():
+        w.append("No web-search key is set, so only GitHub and manual search links are available.")
+    return w
+
+
 def is_excluded(c: dict, job: dict) -> bool:
     excl = job.get("refinement", {}).get("exclude_companies", [])
-    text = f" {c.get('company', '')} {c.get('headline', '')} ".lower()
-    return any(re.search(rf"(?<![a-z0-9]){re.escape(e.lower())}(?![a-z0-9])", text) for e in excl)
+    text = _fold(f" {c.get('company', '')} {c.get('headline', '')} ")
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(_fold(e))}(?![a-z0-9])", text) for e in excl)
+
+
+def _fold(s: str) -> str:
+    """Lower-case and strip accents so "L'Oréal" matches "L'Oreal"."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", s or "") if not unicodedata.combining(ch)).lower()
 
 
 def refine_strategy(job: dict, adj: dict) -> None:

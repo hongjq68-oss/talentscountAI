@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import csv
 import io
 import uuid
@@ -184,8 +185,18 @@ async def refine_preview(job_id: str, body: RefineIn):
     j = store.load_job(job_id)
     if not j or not j.get("role"):
         raise HTTPException(404)
-    adj, how = await refine.parse(body.feedback, j, agent._known_companies(), agent.RECRUITER_SYSTEM)
-    return {"adjustments": adj, "parsed_by": how, "signals": refine.signals(j)}
+    if body.adjustments is None:
+        adj, how = await refine.parse(body.feedback, j, agent._known_companies(), agent.RECRUITER_SYSTEM)
+    else:
+        adj, how = refine._dedupe({**refine.empty(), **body.adjustments}), "recruiter"
+    sig = refine.signals(j)
+    sim = copy.deepcopy(j)  # dry run: what the next round would search, without spending credits
+    changes = refine.apply(sim, adj, sig if body.use_signals else None)
+    refine.refine_strategy(sim, adj)
+    plan = sourcing.plan_queries(sim)
+    cost = sum(not p["cached"] for p in plan) if sourcing.search_provider() else 0
+    return {"adjustments": adj, "parsed_by": how, "signals": sig, "changes": changes, "plan": plan, "cost": cost,
+            "warnings": refine.warnings(sim, plan)}
 
 
 @app.post("/api/jobs/{job_id}/refine")

@@ -1,6 +1,7 @@
 """Candidate discovery: GitHub API and web/LinkedIn X-ray search via pluggable search APIs."""
 import asyncio
 import re
+import time
 import uuid
 from urllib.parse import quote_plus
 
@@ -114,15 +115,38 @@ def parse_web_result(res: dict) -> dict | None:
     return _new_candidate(name=name, headline=title[:120], source="Open Web", url=url, summary=res.get("snippet", ""), evidence=res.get("snippet", ""))
 
 
-async def source_web(queries: list[str], linkedin: bool, open_web: bool, limit: int, log) -> list[dict]:
+def plan_queries(job: dict) -> list[dict]:
+    """Searches the next sourcing run would make, LinkedIn X-ray first; `cached` ones were already run for this role and are skipped."""
+    done, opts = job.get("search_log") or {}, job.get("options", {})
+    plan = []
+    for q in dict.fromkeys(job.get("strategy", {}).get("xray_queries", [])):
+        li = "linkedin.com/in" in q
+        if not (opts.get("open_web", True) or (li and opts.get("linkedin"))):
+            continue
+        prev = done.get(q)
+        plan.append({"q": q, "kind": "linkedin" if li else "web", "cached": bool(prev), "kept": (prev or {}).get("kept")})
+    return sorted(plan, key=lambda p: p["kind"] != "linkedin")
+
+
+async def source_web(plan: list[dict], limit: int, log, keep=None, seen: set | None = None, done: dict | None = None) -> list[dict]:
+    """Run planned searches until `limit` relevant new profiles are found. Skips searches already run and drops off-target results."""
     if not search_provider():
         log("No web-search API key configured — skipping open-web search (manual X-ray links provided in Strategy tab).")
         return []
-    out, seen = [], set()
-    for q in queries:
+    done = {} if done is None else done
+    seen = set() if seen is None else seen
+    cached = [p for p in plan if p["q"] in done]
+    if cached:
+        log(f"Skipped {len(cached)} searches already run for this role (no credits used)")
+    todo = [p["q"] for p in plan if p["q"] not in done]
+    if not todo:
+        log("No new searches to run — change titles, companies or location in Refine to look somewhere new")
+    out = []
+    for i, q in enumerate(todo):
+        if len(out) >= limit:
+            log(f"Found {len(out)} relevant new profiles — stopped early, saved {len(todo) - i} searches")
+            break
         is_li = "linkedin.com/in" in q
-        if not (open_web or (is_li and linkedin)):
-            continue
         try:
             try:
                 results = await web_search(q, 10)
@@ -131,14 +155,24 @@ async def source_web(queries: list[str], linkedin: bool, open_web: bool, limit: 
         except Exception as e:  # noqa: BLE001
             log(f"Search failed for query: {type(e).__name__} {e}")
             continue
-        log(f"{search_provider()}: {len(results)} results for {'public LinkedIn profile' if is_li else 'open web'} query")
+        kept = dup = off = 0
         for r in results:
-            c = parse_linkedin_result(r) if "linkedin.com/in/" in r.get("url", "") else (parse_web_result(r) if open_web else None)
-            if c and c["url"] not in seen and c["name"].lower() not in seen:
-                seen.update((c["url"], c["name"].lower()))
-                out.append(c)
-        if len(out) >= limit:
-            break
+            c = parse_linkedin_result(r) if "linkedin.com/in/" in r.get("url", "") else parse_web_result(r)
+            if not c:
+                off += 1
+                continue
+            if c["url"] in seen or c["name"].lower() in seen:
+                dup += 1
+                continue
+            if keep and not keep(c):
+                off += 1
+                continue
+            seen.update((c["url"], c["name"].lower()))
+            out.append(c)
+            kept += 1
+        done[q] = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": len(results), "kept": kept}
+        log(f"{search_provider()}: {len(results)} results for {'public LinkedIn profile' if is_li else 'open web'} query — "
+            f"{kept} relevant new" + (f", {dup} already found" if dup else "") + (f", {off} off-target dropped" if off else ""))
     return out[:limit]
 
 

@@ -47,6 +47,8 @@ export interface Adjustments {
   include_companies: string[]; exclude_companies: string[]; add_skills: string[]; remove_skills: string[];
   add_titles: string[]; remove_titles: string[]; add_nice: string[]; location: string; seniority: string;
 }
+export interface PlanItem { q: string; kind: "linkedin" | "web"; cached: boolean; kept?: number | null }
+export interface RefinePreview { adjustments: Adjustments; parsed_by: string; signals: RefineSignals; changes: string[]; plan: PlanItem[]; cost: number; warnings: string[] }
 export interface RefineSignals { liked: number; rejected: number; liked_companies: string[]; liked_titles: string[]; avoid_companies: string[]; weak_sources: string[] }
 export interface RefineRound {
   round: number; t: string; feedback: string; parsed_by: string; changes: string[]; signals: RefineSignals | null;

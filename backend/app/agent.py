@@ -190,23 +190,31 @@ async def source_candidates(r: Run):
             cands += gh
         except Exception as e:  # noqa: BLE001
             r.log(f"GitHub sourcing failed: {e}")
-    if opts.get("linkedin", False) or opts.get("open_web", True):
-        cands += await sourcing.source_web(strat.get("xray_queries", []), opts.get("linkedin", False), opts.get("open_web", True), limit, r.log)
     existing = {c["url"] for c in job["candidates"]} | {c["name"].lower() for c in job["candidates"]}
     rnd = len(job.get("refinement", {}).get("rounds", []))
-    new, skipped = [], 0
+    new, dropped = [], 0
     for c in cands:
         if c["url"] in existing or c["name"].lower() in existing:
             continue
-        if refine.is_excluded(c, job):
-            skipped += 1
+        if not refine.relevant(c, job):
+            dropped += 1
             continue
         existing.update((c["url"], c["name"].lower()))
-        c["round"] = rnd
         new.append(c)
+    if dropped:
+        r.log(f"GitHub: dropped {dropped} profiles outside the role's function or from excluded companies")
+    if opts.get("linkedin", False) or opts.get("open_web", True):
+        target = limit if not job["candidates"] else min(limit, 12)
+        if target - len(new) > 0:
+            new += await sourcing.source_web(sourcing.plan_queries(job), target - len(new), r.log, keep=lambda c: refine.relevant(c, job),
+                                             seen=existing, done=job.setdefault("search_log", {}))
+        else:
+            r.log("Enough relevant profiles already — skipped web searches")
+    for c in new:
+        c["round"] = rnd
     job["candidates"] += new
     job["last_added"] = len(new)
-    r.log(f"Sourced {len(cands)} raw profiles, {len(new)} new" + (f", {skipped} skipped (excluded companies)" if skipped else ""))
+    r.log(f"Added {len(new)} new relevant candidates")
     r.save()
 
 

@@ -168,9 +168,67 @@ def search_title(title: str) -> str:
     return t or title
 
 
+FUNCTION_FAMILIES = {
+    "finance": r"cfo|financ\w*|fp&a|controller|treasur\w*|accounting|accountant|comptroller",
+    "sales": r"sales|pre-?sales|account (?:executive|director|manager)|business development|revenue|cro|commercial|go-to-market|gtm",
+    "engineering": r"engineer\w*|developer|cto|architect|devops|sre|software|programmer",
+    "people": r"hr|human resources|people|talent|recruit\w*|chro",
+    "marketing": r"marketing|cmo|brand",
+    "operations": r"operations|coo|supply chain|logistics|procurement",
+    "data": r"data|analytics|machine learning|ml|ai|scientist",
+    "product": r"product",
+    "legal": r"legal|counsel|compliance",
+}
+CXO = {"financial": ("CFO", "Finance"), "finance": ("CFO", "Finance"), "technology": ("CTO", "Engineering"), "operating": ("COO", "Operations"),
+       "marketing": ("CMO", "Marketing"), "people": ("CPO", "People"), "human resources": ("CHRO", "HR"), "revenue": ("CRO", "Sales"),
+       "commercial": ("CCO", "Commercial"), "information": ("CIO", "IT"), "data": ("CDO", "Data"), "product": ("CPO", "Product")}
+
+
+def role_family(title: str) -> str:
+    t = search_title(title or "")
+    for name, pat in FUNCTION_FAMILIES.items():
+        if re.search(rf"\b(?:{pat})\b", t, re.I):
+            return name
+    return ""
+
+
+def on_function(text: str, role_title: str) -> bool:
+    """True when a title/headline is in the same job function as the role being searched (e.g. finance for a CFO search)."""
+    fam = role_family(role_title)
+    return not fam or bool(re.search(rf"\b(?:{FUNCTION_FAMILIES[fam]})\b", text or "", re.I))
+
+
+def cxo(title: str) -> tuple[str, str] | None:
+    m = re.search(r"\bchief\s+(\w+(?:\s+resources)?)\s+officer\b", title or "", re.I)
+    return CXO.get(m.group(1).lower()) if m else None
+
+
+def step_down(title: str) -> list[str]:
+    """Titles one level below a C-level role, e.g. CFO -> Regional CFO / Finance Director."""
+    x = cxo(title)
+    if not x:
+        return []
+    abbr, area = x
+    return [f"Regional {abbr}", f"{area} Director", f"VP {area}", f"Head of {area}"]
+
+
+def clean_location(s: str) -> str:
+    """Turn free text like 'based in barcelona or open to relocate' into a searchable place."""
+    s = (s or "").strip()
+    known = guess_location(s)
+    if known:
+        return known
+    s = re.sub(r"^[-:\s]*(?:(?:based in|located in|only in|in|location)\b\s*[:\-]?\s*)?", "", s, flags=re.I)
+    s = re.split(r"\s+(?:or|and|but|with|/)\s+|[,;(]", s)[0].strip(" .")
+    return " ".join(w[:1].upper() + w[1:] for w in s.split()[:3] if re.search(r"\w", w))
+
+
 def peer_titles(title: str, seniority: str) -> list[str]:
     region = REGION_SUFFIX.search(title)
     title = search_title(title)
+    if seniority == "C-Level" and (x := cxo(title)):
+        abbr, area = x
+        return [title, f"Regional {abbr}", f"VP {area}", f"Head of {area}", f"{area} Director"]
     if GTM_ROLE.search(title) and seniority in ("Senior IC", "Manager / Lead", "Mid-level IC"):
         sfx = f" ({region.group(0).strip(' -–—,(|')})" if region else ""
         return [title + sfx, "Enterprise Account Executive", "Strategic Account Director", "Enterprise Account Manager",
@@ -178,7 +236,7 @@ def peer_titles(title: str, seniority: str) -> list[str]:
     core = re.sub(r"(?i)\b(senior|sr\.?|junior|jr\.?|lead|principal|staff|head of|director of|vp of|vice president of|chief)\b", "", title).strip(" ,-")
     core = core or title
     ladders = {
-        "C-Level": [title, f"VP {core}", f"SVP {core}", f"Head of {core}", "Managing Director"],
+        "C-Level": [title, f"VP {core}", f"SVP {core}", f"Head of {core}"],
         "VP / Head": [title, f"Head of {core}", f"VP {core}", f"Director of {core}", f"Senior Director {core}"],
         "Director": [title, f"Director of {core}", f"Head of {core}", f"Senior Manager {core}", f"Lead {core}"],
         "Manager / Lead": [title, f"Lead {core}", f"Staff {core}", f"Principal {core}", f"{core} Manager"],
