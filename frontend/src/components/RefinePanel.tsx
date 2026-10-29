@@ -114,7 +114,7 @@ export default function RefinePanel({ job, onStarted, onShowCandidates }: { job:
               {FIELDS.map((f) => (
                 <ChipField key={f.key} label={f.label} tone={f.tone} placeholder={f.placeholder} values={adj[f.key]} onChange={(v) => setAdj({ ...adj, [f.key]: v })}
                   suggestions={f.key === "remove_skills" ? role.must_have_skills : f.key === "remove_titles" ? tmap.peer_titles
-                    : f.key === "include_companies" ? signals?.liked_companies : f.key === "add_titles" ? signals?.liked_titles : undefined} />
+                    : f.key === "include_companies" ? signals?.liked_companies : f.key === "add_titles" ? signals?.liked_titles.filter((t) => !tmap.peer_titles.includes(t)) : undefined} />
               ))}
               <div>
                 <div className="text-xs font-medium text-slate-500 mb-1.5">Location</div>
