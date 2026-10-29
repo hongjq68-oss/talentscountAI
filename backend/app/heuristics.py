@@ -124,7 +124,7 @@ def guess_industry(text: str, company: str = "") -> str:
     t = f" {text.lower()} {about.lower() * 3} "
     scores = {ind: sum(t.count(k) for k in keys) for ind, keys in INDUSTRY_KEYWORDS.items()}
     best = max(scores, key=scores.get)
-    return best if scores[best] else "Enterprise SaaS"
+    return best if scores[best] else "General business"
 
 
 def _section(text: str, heads: list[str]) -> str:
@@ -192,14 +192,15 @@ def market_segment(text: str, company: str = "") -> tuple[str, list[str]]:
 def direct_competitors(text: str, company: str, industry: str) -> tuple[list[str], str, str]:
     """Returns (competitors, market segment, basis)."""
     segment, players = market_segment(text, company)
-    key = re.sub(r"\b(inc|ltd|labs|technologies|holdings|group|pte)\b\.?", "", company.lower()).strip(" ,.")
+    key = re.sub(r"\b(inc|ltd|labs|technologies|holdings|group|pte|ag|sa|plc|corp|corporation|limited)\b\.?", "", company.lower()).strip(" ,.")
     if key in COMPANY_COMPETITORS:
         known = COMPANY_COMPETITORS[key]
         overlap, seg = max((len(set(known) & set(ps)), name) for name, _, ps in MARKET_SEGMENTS)
         return known, seg if overlap >= 2 else segment, f"Known competitor set for {company}"
     if players:
         return [c for c in players if not _same_co(c, company)], segment, f"Detected from {company or 'the company'}'s product description"
-    return [c for c in INDUSTRY_COMPANIES.get(industry, []) if not _same_co(c, company)], "", f"{industry} industry leaders (no specific product segment detected)"
+    return [c for c in INDUSTRY_COMPANIES.get(industry, []) if not _same_co(c, company)], "", (f"{industry} industry leaders (no specific product segment detected)" if industry in INDUSTRY_COMPANIES
+           else "Not detected from the JD — add a web-search or AI key to look up competitors")
 
 
 def _a(word: str) -> str:
@@ -316,7 +317,7 @@ def build_strategy(role: dict, tmap: dict) -> dict:
         "skills_matrix": [{"skill": s, "category": "Core", "importance": "Must-have", "signal": "Recent role responsibilities, projects, GitHub repos"} for s in must]
         + [{"skill": s, "category": "Supporting", "importance": "Nice-to-have", "signal": "Profile keywords, certifications, side projects"} for s in nice[:6]],
         "channels": [
-            {"channel": "LinkedIn Recruiter / X-ray", "priority": "High", "tactic": "Target peer titles at primary companies; InMail with role-specific hook"},
+            {"channel": "Open web X-ray (public LinkedIn profiles)", "priority": "High", "tactic": "Google X-ray of public LinkedIn profiles for peer titles at primary companies; reach out by email or a role-specific note"},
             {"channel": "GitHub", "priority": "High" if role.get("function") in ("Languages", "Backend", "Frontend", "Data & AI", "Cloud & Infra") else "Low", "tactic": "Find active contributors by language/location; reference their repos in outreach"},
             {"channel": "Referrals & alumni networks", "priority": "Medium", "tactic": "Mine alumni of target companies and the hiring team's networks"},
             {"channel": "Communities, events & content", "priority": "Medium", "tactic": "Speakers, meetup organisers, authors of relevant posts/papers"},
@@ -330,6 +331,7 @@ def build_strategy(role: dict, tmap: dict) -> dict:
             xray,
             f"site:linkedin.com/in {_or(titles, 2)} {_or(companies[:5], 5)}{loc_q}",
             f"({_or(titles, 2)}) {_or(must, 3)}{loc_q} (resume OR cv OR portfolio OR \"about me\") -jobs -job",
+            f"{_or(titles, 2)} {_or(companies[:4], 4)}{loc_q} (speaker OR panelist OR podcast OR interview) -jobs",
         ],
         "outreach_template": (
             f"Hi {{first_name}},\n\nI'm working with {role.get('company')} on a {role['title']} mandate{(' in ' + loc) if loc else ''}. "

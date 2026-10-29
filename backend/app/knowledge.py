@@ -59,9 +59,13 @@ INDUSTRY_KEYWORDS = {
     "Cybersecurity": ["cybersecurity", "security operations", "threat", "soc ", "zero trust"],
     "Semiconductors & Hardware": ["semiconductor", "chip", "hardware", "silicon", "embedded"],
     "Consulting & Professional Services": ["consulting", "advisory", "client engagement"],
+    "Distribution & Supply Chain": ["distribution", "distributor", "specialty chemicals", "performance materials",
+                                    "market expansion", "ingredients", "supply chain services", "chemical"],
 }
 
 INDUSTRY_COMPANIES = {
+    "Distribution & Supply Chain": ["DKSH", "Brenntag", "IMCD", "Azelis", "Univar Solutions", "Jebsen & Jessen",
+                                    "Zuellig Pharma", "Barentz", "Nagase", "Inchcape"],
     "Fintech & Payments": ["Stripe", "Adyen", "PayPal", "Block", "Wise", "Revolut", "Grab Financial", "Airwallex",
                            "Nium", "Checkout.com", "Klarna", "Ant Group", "Visa", "Mastercard", "Rapyd"],
     "Banking & Financial Services": ["JPMorgan Chase", "Goldman Sachs", "Morgan Stanley", "DBS", "HSBC",
@@ -147,6 +151,13 @@ MARKET_SEGMENTS = [
     ("Cloud infrastructure",
      ["cloud provider", "cloud infrastructure", "hyperscaler", "public cloud", "data centers"],
      ["Amazon Web Services", "Microsoft Azure", "Google Cloud", "Oracle Cloud", "Alibaba Cloud", "DigitalOcean", "Cloudflare"]),
+    ("Specialty chemicals & ingredients distribution",
+     ["specialty chemicals", "performance materials", "chemical distribution", "ingredients distribution", "food ingredients",
+      "personal care ingredients", "pharma ingredients"],
+     ["Brenntag", "IMCD", "Azelis", "Univar Solutions", "Barentz", "Caldic", "Nagase", "Connell Bros"]),
+    ("Market expansion & distribution services",
+     ["market expansion", "distribution services", "route-to-market", "sales and distribution", "healthcare distribution"],
+     ["Zuellig Pharma", "Jebsen & Jessen", "Inchcape", "Li & Fung", "Mitsubishi Corporation", "Sojitz"]),
 ]
 
 # Well-known hiring firms whose direct competitors are not obvious from JD text alone.
@@ -160,5 +171,6 @@ COMPANY_COMPETITORS = {
     "anthropic": ["OpenAI", "Google DeepMind", "Meta AI", "xAI", "Mistral AI", "Cohere"],
     "openai": ["Anthropic", "Google DeepMind", "Meta AI", "xAI", "Mistral AI", "Cohere"],
     "stripe": ["Adyen", "Checkout.com", "PayPal", "Block", "Airwallex", "Worldpay"],
+    "dksh": ["Zuellig Pharma", "Jebsen & Jessen", "Brenntag", "IMCD", "Azelis", "Univar Solutions"],
     "wise": ["Revolut", "Airwallex", "Remitly", "Western Union", "Payoneer", "Nium"],
 }

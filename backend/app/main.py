@@ -60,7 +60,7 @@ def jobs():
 async def create_job(
     background: BackgroundTasks,
     url: str = Form(""), text: str = Form(""), company: str = Form(""), location: str = Form(""),
-    github: bool = Form(True), linkedin: bool = Form(True), open_web: bool = Form(True),
+    github: bool = Form(True), linkedin: bool = Form(False), open_web: bool = Form(True),
     max_candidates: int = Form(25), file: UploadFile | None = File(None),
 ):
     raw = {"company": company.strip(), "location": location.strip()}

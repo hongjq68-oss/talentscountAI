@@ -13,7 +13,7 @@ STEPS = [
     ("analyze", "Executive recruiter intake & role analysis"),
     ("talent_map", "Talent mapping of hiring firm & market"),
     ("strategy", "Skills matrix & sourcing strategy"),
-    ("sourcing", "Searching GitHub, LinkedIn & open web"),
+    ("sourcing", "Searching GitHub & open web (public LinkedIn profiles)"),
     ("scoring", "Scoring & shortlisting candidates"),
 ]
 
@@ -185,8 +185,8 @@ async def source_candidates(r: Run):
             cands += gh
         except Exception as e:  # noqa: BLE001
             r.log(f"GitHub sourcing failed: {e}")
-    if opts.get("linkedin", True) or opts.get("open_web", True):
-        cands += await sourcing.source_web(strat.get("xray_queries", []), opts.get("linkedin", True), opts.get("open_web", True), limit, r.log)
+    if opts.get("linkedin", False) or opts.get("open_web", True):
+        cands += await sourcing.source_web(strat.get("xray_queries", []), opts.get("linkedin", False), opts.get("open_web", True), limit, r.log)
     existing = {c["url"] for c in job["candidates"]}
     job["candidates"] += [c for c in cands if c["url"] not in existing]
     r.log(f"Sourced {len(cands)} raw profiles")

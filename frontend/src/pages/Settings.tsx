@@ -8,7 +8,7 @@ const groups = [
   { title: "AI engine (LLM)", desc: "Powers the executive-recruiter reasoning, talent mapping and candidate assessment. One is enough.", fields: [
     { key: "OPENAI_API_KEY", label: "OpenAI API key", secret: true }, { key: "OPENAI_MODEL", label: "OpenAI model", placeholder: "gpt-4o" },
     { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }, { key: "ANTHROPIC_MODEL", label: "Anthropic model", placeholder: "claude-sonnet-4-5" }] },
-  { title: "Web search (LinkedIn & open-web X-ray)", desc: "Used to run LinkedIn X-ray and open-web searches automatically. One is enough.", fields: [
+  { title: "Web search (open web & public LinkedIn profiles)", desc: "Used to search the open web, including public LinkedIn profiles, automatically. One is enough.", fields: [
     { key: "SERPER_API_KEY", label: "Serper.dev API key", secret: true }, { key: "TAVILY_API_KEY", label: "Tavily API key", secret: true },
     { key: "BRAVE_API_KEY", label: "Brave Search API key", secret: true }, { key: "SERPAPI_API_KEY", label: "SerpAPI key", secret: true }] },
   { title: "GitHub", desc: "Optional personal access token (no scopes needed) for higher API rate limits.", fields: [{ key: "GITHUB_TOKEN", label: "GitHub token", secret: true }] },

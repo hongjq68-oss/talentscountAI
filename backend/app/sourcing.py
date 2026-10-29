@@ -105,19 +105,19 @@ def parse_web_result(res: dict) -> dict | None:
 
 async def source_web(queries: list[str], linkedin: bool, open_web: bool, limit: int, log) -> list[dict]:
     if not search_provider():
-        log("No web-search API key configured — skipping LinkedIn/open-web X-ray (manual search links provided in Strategy tab).")
+        log("No web-search API key configured — skipping open-web search (manual X-ray links provided in Strategy tab).")
         return []
     out, seen = [], set()
     for q in queries:
         is_li = "linkedin.com/in" in q
-        if (is_li and not linkedin) or (not is_li and not open_web):
+        if not (open_web or (is_li and linkedin)):
             continue
         try:
             results = await web_search(q, 10)
         except Exception as e:  # noqa: BLE001
             log(f"Search failed for query: {e}")
             continue
-        log(f"{search_provider()}: {len(results)} results for {'LinkedIn X-ray' if is_li else 'open web'} query")
+        log(f"{search_provider()}: {len(results)} results for {'public LinkedIn profile' if is_li else 'open web'} query")
         for r in results:
             c = parse_linkedin_result(r) if "linkedin.com/in/" in r.get("url", "") else (parse_web_result(r) if open_web else None)
             if c and c["url"] not in seen:

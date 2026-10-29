@@ -3,7 +3,7 @@ import { AlertCircle, FileSpreadsheet, FileText, Globe, Link2, Loader2, Sparkles
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
-import { GithubIcon, LinkedinIcon } from "../components/ui";
+import { GithubIcon } from "../components/ui";
 import type { Status } from "../types";
 
 const SAMPLE = `Head of Data Platform
@@ -37,7 +37,7 @@ export default function NewSearch({ status }: { status: Status | null }) {
   const [file, setFile] = useState<File | null>(null);
   const [company, setCompany] = useState("");
   const [location, setLocation] = useState("");
-  const [sources, setSources] = useState({ github: true, linkedin: true, open_web: true });
+  const [sources, setSources] = useState({ github: true, linkedin: false, open_web: true });
   const [max, setMax] = useState(25);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -138,10 +138,9 @@ export default function NewSearch({ status }: { status: Status | null }) {
 
           <div>
             <div className="label">3. Sourcing channels</div>
-            <div className="grid sm:grid-cols-3 gap-3">
+            <div className="grid sm:grid-cols-2 gap-3">
               <Toggle on={sources.github} onClick={() => setSources((s) => ({ ...s, github: !s.github }))} icon={<GithubIcon />} label="GitHub" sub="Public profiles & repos" />
-              <Toggle on={sources.linkedin} onClick={() => setSources((s) => ({ ...s, linkedin: !s.linkedin }))} icon={<LinkedinIcon className="h-4 w-4 text-[#0a66c2]" />} label="LinkedIn" sub={status?.search ? "X-ray via search API" : "Boolean + search links"} />
-              <Toggle on={sources.open_web} onClick={() => setSources((s) => ({ ...s, open_web: !s.open_web }))} icon={<Globe className="h-4 w-4 text-emerald-600" />} label="Open web" sub="Sites, talks, papers" />
+              <Toggle on={sources.open_web} onClick={() => setSources((s) => ({ ...s, open_web: !s.open_web }))} icon={<Globe className="h-4 w-4 text-emerald-600" />} label="Open web" sub={status?.search ? "Public LinkedIn profiles, sites, talks" : "Needs a web-search key (Integrations)"} />
             </div>
             <div className="mt-4 flex items-center gap-4">
               <span className="text-sm text-slate-600 w-40">Max candidates: <b>{max}</b></span>
