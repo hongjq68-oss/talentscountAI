@@ -64,9 +64,9 @@ export default function CandidateDrawer({ c, template, onClose, onPatch }: { c: 
                 <div className="text-sm text-slate-600 mt-0.5">{c.rationale}</div>
               </div>
             </div>
-            <div className="grid grid-cols-5 gap-2 mt-4">
+            <div className="grid grid-cols-6 gap-2 mt-4">
               {Object.entries(c.breakdown || {}).map(([k, v]) => {
-                const maxes: Record<string, number> = { Skills: 40, "Title/Seniority": 20, Company: 20, Location: 10, Signals: 10 };
+                const maxes: Record<string, number> = { Skills: 40, "Title/Seniority": 20, Company: 20, Location: 10, Signals: 10, Industry: 10 };
                 return (
                   <div key={k}>
                     <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden"><div className="h-full bg-brand-500" style={{ width: `${(v / (maxes[k] || 20)) * 100}%` }} /></div>

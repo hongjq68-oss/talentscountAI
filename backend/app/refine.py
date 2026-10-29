@@ -5,7 +5,7 @@ from collections import Counter
 
 from . import heuristics, llm, sourcing
 
-FIELDS = ["include_companies", "exclude_companies", "add_skills", "remove_skills", "add_titles", "remove_titles"]
+FIELDS = ["include_companies", "exclude_companies", "add_skills", "remove_skills", "add_titles", "remove_titles", "industries"]
 POSITIVE_STAGES = ("Shortlisted", "Contacted", "Interviewing", "Offer", "Hired")
 
 _KW = (r"exclude|excluding|avoid|no one from|nobody from|not from|skip|remove|drop|without|more (?:people |candidates |profiles )?from"
@@ -107,6 +107,11 @@ def parse_heuristic(text: str, job: dict, known: set[str]) -> dict:
         adj["add_titles"].append(m.group(1).strip())
     for m in re.finditer(r"\b((?:[A-Z][\w&/]*\s?){1,3}?)\s*(?:experience|background)\s+(?:would be|is)\s+(?:an?\s+)?(?:\w+\s+)?(?:advantage|plus|bonus)", t):
         adj["add_nice"].append(m.group(1).strip())
+    for m in re.finditer(r"\b(?:from|with)\s+(?:an?\s+|the\s+)?([a-zA-Z&,/\- ]{3,80}?)\s+(?:backgrounds?|industr(?:y|ies)|sectors?)\b", t, re.I):
+        for x in re.split(r",\s*|\s+(?:and|or|&)\s+|\s*/\s*", m.group(1)):
+            x = x.strip()
+            if x and len(x.split()) <= 3 and not _FILLER.match(x):
+                adj["industries"].append(x)
     if re.search(r"\bmore senior\b|\btoo junior\b", t, re.I):
         adj["seniority"] = "more senior"
     elif re.search(r"\bmore junior\b|\btoo senior\b", t, re.I):
@@ -139,7 +144,7 @@ async def parse(text: str, job: dict, known: set[str], system: str) -> tuple[dic
                 f"Current target companies: {[c['name'] for c in job['talent_map'].get('target_companies', [])]}\n"
                 f"Location: {job['role'].get('location')}\n\nFeedback: \"\"\"{text}\"\"\"\n\n"
                 "Translate it into adjustments. Return JSON with keys: include_companies, exclude_companies, add_skills, remove_skills, "
-                "add_titles, remove_titles, add_nice (arrays of strings), location (string, empty if unchanged), seniority "
+                "add_titles, remove_titles, add_nice, industries (arrays of strings; industries = sectors candidates should come from), location (string, empty if unchanged), seniority "
                 "('more senior', 'more junior' or '')."
             )
             return _dedupe({**empty(), **(await llm.complete_json(system, prompt, 1500))}), "ai"
@@ -209,6 +214,9 @@ def apply(job: dict, adj: dict, sig: dict | None) -> list[str]:
         changes.append(f"Nice-to-have skills added: {', '.join(adj['add_nice'])}")
 
     role_title = role.get("title", "")
+    if adj.get("industries"):
+        role["target_industries"] = list(dict.fromkeys(role.get("target_industries", []) + adj["industries"]))
+        changes.append(f"Target industries: {', '.join(adj['industries'])}")
     titles = [t for t in tmap.get("peer_titles", []) if t.lower() not in low(adj["remove_titles"])]
     new_titles = list(adj["add_titles"])
     if sig and sig.get("liked_titles"):
@@ -315,6 +323,6 @@ def refine_strategy(job: dict, adj: dict) -> None:
     loc = "" if loc.lower() in ("not specified", "remote", "global") else loc
     title0 = heuristics.search_title((job["talent_map"].get("peer_titles") or [job["role"]["title"]])[0])
     extra = [f'site:linkedin.com/in "{title0}" "{s}" {loc}'.strip() for s in adj["add_skills"][:2]]
-    strat["xray_queries"] = extra + strat["xray_queries"]
+    strat["xray_queries"] = list(dict.fromkeys(strat["xray_queries"][:5] + extra[:1]))
     strat["manual_search_links"] = [{"query": q, **sourcing.manual_links(q)} for q in strat["xray_queries"]]
     job["strategy"] = strat

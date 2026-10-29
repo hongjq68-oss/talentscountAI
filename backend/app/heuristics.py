@@ -169,12 +169,12 @@ def search_title(title: str) -> str:
 
 
 FUNCTION_FAMILIES = {
-    "finance": r"cfo|financ\w*|fp&a|controller|treasur\w*|accounting|accountant|comptroller",
-    "sales": r"sales|pre-?sales|account (?:executive|director|manager)|business development|revenue|cro|commercial|go-to-market|gtm",
+    "finance": r"cfo|financ\w*|finanz\w*|fp&a|controller|treasur\w*|tesorer\w*|accounting|accountant|comptroller|daf|contable|contabilidad",
+    "sales": r"sales|pre-?sales|account (?:executive|director|manager)|business development|revenue|cro|commercial|go-to-market|gtm|comercial|ventas|vertrieb\w*",
     "engineering": r"engineer\w*|developer|cto|architect|devops|sre|software|programmer",
-    "people": r"hr|human resources|people|talent|recruit\w*|chro",
+    "people": r"hr|human resources|recursos humanos|rrhh|people|talent|recruit\w*|chro",
     "marketing": r"marketing|cmo|brand",
-    "operations": r"operations|coo|supply chain|logistics|procurement",
+    "operations": r"operations|operaciones|coo|supply chain|logistics|procurement",
     "data": r"data|analytics|machine learning|ml|ai|scientist",
     "product": r"product",
     "legal": r"legal|counsel|compliance",
@@ -182,6 +182,71 @@ FUNCTION_FAMILIES = {
 CXO = {"financial": ("CFO", "Finance"), "finance": ("CFO", "Finance"), "technology": ("CTO", "Engineering"), "operating": ("COO", "Operations"),
        "marketing": ("CMO", "Marketing"), "people": ("CPO", "People"), "human resources": ("CHRO", "HR"), "revenue": ("CRO", "Sales"),
        "commercial": ("CCO", "Commercial"), "information": ("CIO", "IT"), "data": ("CDO", "Data"), "product": ("CPO", "Product")}
+
+
+LOCALE = {"Barcelona": "es", "Madrid": "es", "Valencia": "es", "Bilbao": "es", "Seville": "es", "Mexico City": "es", "Munich": "de",
+          "Frankfurt": "de", "Berlin": "de", "Hamburg": "de", "Vienna": "de", "Zurich": "de", "Basel": "de", "Paris": "fr", "Lyon": "fr",
+          "Brussels": "fr", "Geneva": "fr", "Milan": "it", "Rome": "it", "Lisbon": "pt", "Porto": "pt", "São Paulo": "pt"}
+# Titles senior people actually use on local-language LinkedIn profiles
+LOCAL_TITLES = {
+    "es": {"finance": ["Director Financiero", "Directora Financiera", "Controller Financiero"], "sales": ["Director Comercial"],
+           "operations": ["Director de Operaciones"], "people": ["Director de Recursos Humanos"], "marketing": ["Director de Marketing"]},
+    "de": {"finance": ["Leiter Finanzen", "Kaufmännischer Leiter"], "sales": ["Vertriebsleiter"], "operations": ["Leiter Operations"]},
+    "fr": {"finance": ["Directeur Financier", "DAF"], "sales": ["Directeur Commercial"], "operations": ["Directeur des Opérations"]},
+    "it": {"finance": ["Direttore Finanziario"], "sales": ["Direttore Commerciale"]},
+    "pt": {"finance": ["Diretor Financeiro"], "sales": ["Diretor Comercial"]},
+}
+INDUSTRY_TERMS = {
+    "performance materials": {"en": "materials", "es": "materiales", "de": "Werkstoffe", "fr": "matériaux", "it": "materiali", "alt": ["specialty", "especialidades", "additives", "aditivos", "coatings"]},
+    "chemical": {"en": "chemicals", "es": "química", "de": "Chemie", "fr": "chimie", "it": "chimica", "pt": "química", "alt": ["chemical", "quimica", "químico", "químicos"]},
+    "industrial": {"en": "industrial", "es": "industrial", "de": "Industrie", "fr": "industriel", "it": "industriale", "alt": ["industria", "manufacturing", "fabricación"]},
+    "pharma": {"en": "pharmaceutical", "es": "farmacéutica", "de": "Pharma", "fr": "pharmaceutique", "alt": ["pharma", "farma"]},
+    "distribution": {"en": "distribution", "es": "distribución", "de": "Distribution", "fr": "distribution", "alt": ["distributor", "distribuidor"]},
+    "automotive": {"en": "automotive", "es": "automoción", "de": "Automobil", "fr": "automobile", "alt": ["automotriz"]},
+    "energy": {"en": "energy", "es": "energía", "de": "Energie", "fr": "énergie", "alt": ["oil", "gas", "utilities"]},
+    "consumer goods": {"en": "FMCG", "es": "gran consumo", "alt": ["consumer goods", "cpg"]},
+    "private equity": {"en": "private equity", "es": "private equity", "alt": ["portfolio company", "pe-backed"]},
+}
+
+
+def _industry_key(name: str) -> str:
+    n = name.lower()
+    return next((k for k in INDUSTRY_TERMS if k in n or n in k or n.rstrip("s") in k), "")
+
+
+def industry_query_term(name: str, lang: str) -> str:
+    k = _industry_key(name)
+    return INDUSTRY_TERMS[k].get(lang) or INDUSTRY_TERMS[k]["en"] if k else name
+
+
+def industry_terms(names: list[str]) -> list[str]:
+    """Every word (any language) that signals a candidate comes from one of these industries."""
+    out = []
+    for n in names:
+        k = _industry_key(n)
+        out += [n] + ([v for key, v in INDUSTRY_TERMS[k].items() if key != "alt"] + INDUSTRY_TERMS[k]["alt"] if k else [])
+    return list(dict.fromkeys(t for t in out if t))
+
+
+def xray_queries(role: dict, tmap: dict, titles: list[str], companies: list[str], loc: str, budget: int = 6) -> list[str]:
+    """Executive-researcher style X-ray: local-language titles x target industries in the target city.
+    Title + quoted company + city combinations are avoided: search APIs return almost nothing for them."""
+    lang = LOCALE.get(loc, "")
+    local = LOCAL_TITLES.get(lang, {}).get(role_family(role.get("title", "")), []) if role.get("seniority") in ("C-Level", "VP / Head", "Director") else []
+    pool = list(dict.fromkeys(local[:2] + titles[:3]))
+    terms = list(dict.fromkeys(industry_query_term(i, lang) for i in role.get("target_industries", [])))[:3]
+    li = lambda *parts: " ".join(["site:linkedin.com/in", *[p for p in parts if p]])
+    if terms:
+        pairs = sorted(((i, j) for i in range(min(3, len(pool))) for j in range(len(terms))), key=lambda p: (p[0] + p[1], p[0]))
+        base = [li(f'"{pool[i]}"', terms[j], loc) for i, j in pairs]
+    else:
+        base = [li(f'"{t}"', loc) for t in pool[:4]]
+    requested = [re.sub(r"\s*\(.*\)", "", c["name"]) for c in tmap.get("target_companies", []) if c.get("rationale") == "Requested by recruiter feedback"]
+    req = [li(f'"{pool[0]}"', c, loc) for c in requested[:2]] if pool else []
+    qs = base[:4] + req + base[4:]
+    if is_technical_role(role) and companies and pool:
+        qs.append(f"{_or(pool, 2)} {_or(companies[:4], 4)}{' ' + chr(34) + loc + chr(34) if loc else ''} (speaker OR panelist OR podcast OR interview) -jobs -hiring")
+    return list(dict.fromkeys(qs))[:budget]
 
 
 def role_family(title: str) -> str:
@@ -407,9 +472,7 @@ def build_strategy(role: dict, tmap: dict) -> dict:
             "github": f"{'language:' + must[0].lower() if must else ''}{' location:' + chr(34) + loc + chr(34) if loc else ''} followers:>20".strip(),
         },
         # one title per query, no OR/minus operators: search APIs (e.g. DuckDuckGo via SerpAPI) drop complex site: queries
-        "xray_queries": [f'site:linkedin.com/in "{t}" {loc}'.strip() for t in titles[:2]]
-        + [f'site:linkedin.com/in "{titles[0]}" "{c}" {loc}'.strip() for c in companies[:2]]
-        + [f"{_or(titles, 2)} {_or(companies[:4], 4)}{loc_q} (speaker OR panelist OR podcast OR interview) -jobs -hiring"],
+        "xray_queries": xray_queries(role, tmap, titles, companies, loc),
         "outreach_template": (
             f"Hi {{first_name}},\n\nI'm working with {role.get('company')} on a {role['title']} mandate{(' in ' + loc) if loc else ''}. "
             f"Your work on {{hook}} stood out — particularly your experience with {', '.join(must[:2]) or 'this space'}.\n\n"

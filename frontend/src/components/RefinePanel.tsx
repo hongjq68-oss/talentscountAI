@@ -4,11 +4,12 @@ import { api } from "../api";
 import type { Adjustments, Job, RefinePreview, RefineSignals } from "../types";
 import { Badge, Card, timeAgo } from "./ui";
 
-type ListKey = "include_companies" | "exclude_companies" | "add_skills" | "remove_skills" | "add_titles" | "remove_titles";
-const EMPTY: Adjustments = { include_companies: [], exclude_companies: [], add_skills: [], remove_skills: [], add_titles: [], remove_titles: [], add_nice: [], location: "", seniority: "" };
+type ListKey = "include_companies" | "exclude_companies" | "add_skills" | "remove_skills" | "add_titles" | "remove_titles" | "industries";
+const EMPTY: Adjustments = { include_companies: [], exclude_companies: [], add_skills: [], remove_skills: [], add_titles: [], remove_titles: [], industries: [], add_nice: [], location: "", seniority: "" };
 const FIELDS: { key: ListKey; label: string; tone: string; placeholder: string }[] = [
   { key: "include_companies", label: "Prioritise companies", tone: "blue", placeholder: "Add company…" },
   { key: "exclude_companies", label: "Exclude companies", tone: "red", placeholder: "Add company…" },
+  { key: "industries", label: "Target industries", tone: "cyan", placeholder: "e.g. chemicals" },
   { key: "add_skills", label: "Add must-have skills", tone: "green", placeholder: "Add skill…" },
   { key: "remove_skills", label: "Drop skills", tone: "amber", placeholder: "Add skill…" },
   { key: "add_titles", label: "Add job titles", tone: "violet", placeholder: "Add title…" },
@@ -196,6 +197,7 @@ export default function RefinePanel({ job, onStarted, onShowCandidates }: { job:
 
       <Card title="Current search" icon={<Sparkles className="h-4 w-4 text-brand-600" />} className="h-fit">
         <div className="space-y-4 text-sm">
+          {!!role.target_industries?.length && <Section label="Target industries" items={role.target_industries} tone="cyan" />}
           <Section label="Must-have skills" items={role.must_have_skills} tone="green" />
           <Section label="Job titles searched" items={tmap.peer_titles} tone="violet" />
           <Section label="Target companies" items={(tmap.target_companies || []).filter((c) => c.tier === "Primary").map((c) => c.name)} tone="blue" />

@@ -1,6 +1,7 @@
 """Candidate discovery: GitHub API and web/LinkedIn X-ray search via pluggable search APIs."""
 import asyncio
 import re
+import unicodedata
 import time
 import uuid
 from urllib.parse import quote_plus
@@ -74,6 +75,18 @@ def _new_candidate(**kw) -> dict:
     return base
 
 
+def name_key(n: str) -> str:
+    """Accent/case-insensitive name for de-duplication (Martínez == Martinez)."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", n or "") if not unicodedata.combining(ch)).lower().strip()
+
+
+def company_from(headline: str, snippet: str) -> str:
+    """Employer from local-language profile text, e.g. 'Experiencia: Arkema Química, SA' or 'Director Financiero en Arkema'."""
+    m = re.search(r"(?:Experiencia|Experience|Berufserfahrung|Expérience|Esperienza|Experiência):\s*([^·]{2,50}?)\s*(?:·|$)", snippet or "") \
+        or re.search(r"\s(?:en|at|@|bei|chez|presso|na)\s+([A-Z][\w&.'\- ]{1,40}?)(?:\s*(?:\.\.\.|…|\||·|,)|$)", headline or "")
+    return m.group(1).strip(" .") if m else ""
+
+
 def parse_linkedin_result(res: dict) -> dict | None:
     url = res["url"].split("?")[0]
     if "linkedin.com/in/" not in url:
@@ -84,8 +97,11 @@ def parse_linkedin_result(res: dict) -> dict | None:
     parts = [p.strip() for p in re.split(r"\s[-–—|]\s", title) if p.strip()]
     name = parts[0] if parts else title
     headline = parts[1] if len(parts) > 1 else ""
+    if not name or len(name.split()) > 5 or re.search(r"\b(director|directora|financiero|manager|cfo|ceo|coo|head|en|at|bei|chez|linkedin)\b", name, re.I):
+        return None  # title-only results like "Director Financiero en ..." are not a person
     company = parts[2] if len(parts) > 2 else ""
     snippet = res.get("snippet", "")
+    company = company or company_from(headline, snippet)
     if not company:
         m = re.search(r"(?:Experience|at)\s*[:\-]?\s*([A-Z][\w&.\- ]{1,40}?)(?:[·|.,]|\s{2}|$)", snippet)
         company = m.group(1).strip() if m else ""
@@ -161,13 +177,13 @@ async def source_web(plan: list[dict], limit: int, log, keep=None, seen: set | N
             if not c:
                 off += 1
                 continue
-            if c["url"] in seen or c["name"].lower() in seen:
+            if c["url"] in seen or name_key(c["name"]) in seen:
                 dup += 1
                 continue
             if keep and not keep(c):
                 off += 1
                 continue
-            seen.update((c["url"], c["name"].lower()))
+            seen.update((c["url"], name_key(c["name"])))
             out.append(c)
             kept += 1
         done[q] = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": len(results), "kept": kept}

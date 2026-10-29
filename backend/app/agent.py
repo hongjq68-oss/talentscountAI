@@ -190,16 +190,16 @@ async def source_candidates(r: Run):
             cands += gh
         except Exception as e:  # noqa: BLE001
             r.log(f"GitHub sourcing failed: {e}")
-    existing = {c["url"] for c in job["candidates"]} | {c["name"].lower() for c in job["candidates"]}
+    existing = {c["url"] for c in job["candidates"]} | {sourcing.name_key(c["name"]) for c in job["candidates"]}
     rnd = len(job.get("refinement", {}).get("rounds", []))
     new, dropped = [], 0
     for c in cands:
-        if c["url"] in existing or c["name"].lower() in existing:
+        if c["url"] in existing or sourcing.name_key(c["name"]) in existing:
             continue
         if not refine.relevant(c, job):
             dropped += 1
             continue
-        existing.update((c["url"], c["name"].lower()))
+        existing.update((c["url"], sourcing.name_key(c["name"])))
         new.append(c)
     if dropped:
         r.log(f"GitHub: dropped {dropped} profiles outside the role's function or from excluded companies")
@@ -286,24 +286,32 @@ def heuristic_score(c: dict, job: dict) -> dict:
     loc_score = 10 if loc and loc not in ("not specified", "remote") and loc in (c.get("location", "") + " " + c.get("summary", "")).lower() else (5 if not loc or loc in ("not specified", "remote") else 0)
     gh = c.get("github") or {}
     signals = min(10, (gh.get("followers", 0) ** 0.5) / 4 + (gh.get("stars", 0) ** 0.5) / 6 + (2 if gh.get("hireable") else 0)) if gh else (6 if c["source"] == "LinkedIn" else 3)
-    total = max(0, round(skills + title + comp_score + loc_score + signals))
+    inds = role.get("target_industries", [])
+    raw = refine._fold(" ".join([c.get("headline", ""), c.get("company", ""), c.get("summary", "")]))
+    ind_hit = next((t for t in heuristics.industry_terms(inds) if re.search(rf"(?<![a-z]){re.escape(refine._fold(t))}", raw)), "")
+    ind_score = 10 if ind_hit else 0
+    total = max(0, round(skills + title + comp_score + loc_score + signals + ind_score))
     strengths = []
     if m_hit:
         strengths.append(f"Matches must-haves: {', '.join(m_hit[:5])}")
     if comp_match:
         strengths.append(f"From target company {comp_match}")
+    if ind_hit:
+        strengths.append(f"Industry background: {ind_hit}")
     if gh.get("stars", 0) > 100:
         strengths.append(f"Strong open-source signal ({gh['stars']} stars)")
     concerns = []
     missing = [s for s in must if s not in m_hit][:4]
     if missing:
         concerns.append(f"No visible evidence of: {', '.join(missing)}")
+    if inds and not ind_hit:
+        concerns.append(f"No visible {', '.join(inds[:3])} background")
     if loc_score == 0 and loc:
         concerns.append("Location may not match")
     if avoided:
         concerns.append(f"Similar background to candidates you rejected ({avoided[0]})")
     return {"score": min(100, total), "breakdown": {"Skills": round(skills), "Title/Seniority": round(title), "Company": comp_score,
-            "Location": loc_score, "Signals": round(signals)}, "skills": m_hit + n_hit, "strengths": strengths, "concerns": concerns}
+            "Location": loc_score, "Signals": round(signals), **({"Industry": ind_score} if inds else {})}, "skills": m_hit + n_hit, "strengths": strengths, "concerns": concerns}
 
 
 async def score_candidates(r: Run, use_llm: bool):

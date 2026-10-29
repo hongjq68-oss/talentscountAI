@@ -13,7 +13,7 @@ export interface Candidate {
 }
 export interface Role {
   title: string; company: string; location: string; seniority: string; function: string; industry: string;
-  years_experience: string; summary: string; must_have_skills: string[]; nice_to_have_skills: string[];
+  years_experience: string; summary: string; must_have_skills: string[]; target_industries?: string[]; nice_to_have_skills: string[];
   responsibilities: string[]; requirements: string[]; education: string; compensation_hint: string;
 }
 export interface RecruiterBrief {
@@ -45,7 +45,7 @@ export interface Job {
 }
 export interface Adjustments {
   include_companies: string[]; exclude_companies: string[]; add_skills: string[]; remove_skills: string[];
-  add_titles: string[]; remove_titles: string[]; add_nice: string[]; location: string; seniority: string;
+  add_titles: string[]; remove_titles: string[]; industries: string[]; add_nice: string[]; location: string; seniority: string;
 }
 export interface PlanItem { q: string; kind: "linkedin" | "web"; cached: boolean; kept?: number | null }
 export interface RefinePreview { adjustments: Adjustments; parsed_by: string; signals: RefineSignals; changes: string[]; plan: PlanItem[]; cost: number; warnings: string[] }
