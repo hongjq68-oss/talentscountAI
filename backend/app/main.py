@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agent, ingest, llm, sourcing, store
+from . import agent, ingest, llm, refine, sourcing, store
 
 app = FastAPI(title="Talent Sourcing Agent")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -120,6 +120,8 @@ def patch_candidate(job_id: str, cid: str, body: CandidatePatch):
             for k, v in body.model_dump(exclude_none=True).items():
                 if k == "stage" and v not in STAGES:
                     raise HTTPException(400, "bad stage")
+                if k == "stage":
+                    c["stage_manual"], c["excluded"] = True, False
                 c[k] = v
             store.save_job(j)
             return c
@@ -169,6 +171,36 @@ async def resource(job_id: str, background: BackgroundTasks):
 
     background.add_task(go)
     return {"ok": True}
+
+
+class RefineIn(BaseModel):
+    feedback: str = ""
+    adjustments: dict | None = None
+    use_signals: bool = True
+
+
+@app.post("/api/jobs/{job_id}/refine/preview")
+async def refine_preview(job_id: str, body: RefineIn):
+    j = store.load_job(job_id)
+    if not j or not j.get("role"):
+        raise HTTPException(404)
+    adj, how = await refine.parse(body.feedback, j, agent._known_companies(), agent.RECRUITER_SYSTEM)
+    return {"adjustments": adj, "parsed_by": how, "signals": refine.signals(j)}
+
+
+@app.post("/api/jobs/{job_id}/refine")
+async def refine_job(job_id: str, body: RefineIn, background: BackgroundTasks):
+    j = store.load_job(job_id)
+    if not j or not j.get("role") or j["status"] == "running":
+        raise HTTPException(400, "Job not found or still running")
+    if body.adjustments is None:
+        adj, how = await refine.parse(body.feedback, j, agent._known_companies(), agent.RECRUITER_SYSTEM)
+    else:
+        adj, how = refine._dedupe({**refine.empty(), **body.adjustments}), "recruiter"
+    j["status"] = "running"
+    store.save_job(j)
+    background.add_task(agent.run_refinement, job_id, body.feedback, adj, body.use_signals, how)
+    return {"ok": True, "adjustments": adj}
 
 
 @app.get("/api/jobs/{job_id}/export.csv")

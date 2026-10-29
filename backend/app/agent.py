@@ -4,7 +4,7 @@ import re
 import traceback
 from datetime import datetime, timezone
 
-from . import heuristics, llm, sourcing
+from . import heuristics, llm, refine, sourcing
 from .knowledge import COMPANY_COMPETITORS, INDUSTRY_COMPANIES, MARKET_SEGMENTS
 from .store import load_job, save_job
 
@@ -192,9 +192,57 @@ async def source_candidates(r: Run):
             r.log(f"GitHub sourcing failed: {e}")
     if opts.get("linkedin", False) or opts.get("open_web", True):
         cands += await sourcing.source_web(strat.get("xray_queries", []), opts.get("linkedin", False), opts.get("open_web", True), limit, r.log)
-    existing = {c["url"] for c in job["candidates"]}
-    job["candidates"] += [c for c in cands if c["url"] not in existing]
-    r.log(f"Sourced {len(cands)} raw profiles")
+    existing = {c["url"] for c in job["candidates"]} | {c["name"].lower() for c in job["candidates"]}
+    rnd = len(job.get("refinement", {}).get("rounds", []))
+    new, skipped = [], 0
+    for c in cands:
+        if c["url"] in existing or c["name"].lower() in existing:
+            continue
+        if refine.is_excluded(c, job):
+            skipped += 1
+            continue
+        existing.update((c["url"], c["name"].lower()))
+        c["round"] = rnd
+        new.append(c)
+    job["candidates"] += new
+    job["last_added"] = len(new)
+    r.log(f"Sourced {len(cands)} raw profiles, {len(new)} new" + (f", {skipped} skipped (excluded companies)" if skipped else ""))
+    r.save()
+
+
+async def run_refinement(job_id: str, feedback: str, adj: dict, use_signals: bool, parsed_by: str):
+    r = Run(load_job(job_id))
+    job = r.job
+    try:
+        sig = refine.signals(job) if use_signals else None
+        changes = refine.apply(job, adj, sig)
+        rounds = job["refinement"]["rounds"]
+        n = len(rounds) + 1
+        r.log(f"Refinement round {n}: " + ("; ".join(changes) or "no strategy changes — re-sourcing"))
+        r.step("strategy", "running")
+        refine.refine_strategy(job, adj)
+        r.step("strategy", "done")
+        excluded = 0
+        for c in job["candidates"]:
+            if refine.is_excluded(c, job) and not c.get("stage_manual") and c["stage"] in ("Sourced", "Shortlisted"):
+                c["stage"], c["excluded"] = "Rejected", True
+                excluded += 1
+        entry = {"round": n, "t": now(), "feedback": feedback, "parsed_by": parsed_by, "changes": changes,
+                 "signals": sig, "added": 0, "excluded": excluded, "shortlisted_new": 0}
+        rounds.append(entry)
+        r.step("sourcing", "running")
+        await source_candidates(r)
+        r.step("sourcing", "done")
+        entry["added"] = job.pop("last_added", 0)
+        r.step("scoring", "running")
+        await score_candidates(r, llm.provider() is not None)
+        r.step("scoring", "done")
+        entry["shortlisted_new"] = sum(1 for c in job["candidates"] if c.get("round") == n and c["stage"] == "Shortlisted")
+        r.log(f"Refinement round {n} complete — {entry['added']} new candidates, {entry['shortlisted_new']} newly shortlisted")
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        r.log(f"Refinement failed: {e}")
+    job["status"] = "complete"
     r.save()
 
 
@@ -223,11 +271,14 @@ def heuristic_score(c: dict, job: dict) -> dict:
             val = {"Primary": 20, "Secondary": 14}.get(t.get("tier"), 8)
             if val > comp_score:
                 comp_score, comp_match = val, t["name"]
+    avoided = [a for a in (job.get("refinement") or {}).get("avoid_companies", []) if _norm(a).strip() and _norm(a).strip() in cc]
+    if avoided:
+        comp_score -= 10
     loc = (role.get("location") or "").split(",")[0].strip().lower()
     loc_score = 10 if loc and loc not in ("not specified", "remote") and loc in (c.get("location", "") + " " + c.get("summary", "")).lower() else (5 if not loc or loc in ("not specified", "remote") else 0)
     gh = c.get("github") or {}
     signals = min(10, (gh.get("followers", 0) ** 0.5) / 4 + (gh.get("stars", 0) ** 0.5) / 6 + (2 if gh.get("hireable") else 0)) if gh else (6 if c["source"] == "LinkedIn" else 3)
-    total = round(skills + title + comp_score + loc_score + signals)
+    total = max(0, round(skills + title + comp_score + loc_score + signals))
     strengths = []
     if m_hit:
         strengths.append(f"Matches must-haves: {', '.join(m_hit[:5])}")
@@ -241,6 +292,8 @@ def heuristic_score(c: dict, job: dict) -> dict:
         concerns.append(f"No visible evidence of: {', '.join(missing)}")
     if loc_score == 0 and loc:
         concerns.append("Location may not match")
+    if avoided:
+        concerns.append(f"Similar background to candidates you rejected ({avoided[0]})")
     return {"score": min(100, total), "breakdown": {"Skills": round(skills), "Title/Seniority": round(title), "Company": comp_score,
             "Location": loc_score, "Signals": round(signals)}, "skills": m_hit + n_hit, "strengths": strengths, "concerns": concerns}
 
@@ -275,7 +328,7 @@ async def score_candidates(r: Run, use_llm: bool):
     threshold = int(job["options"].get("shortlist_threshold", 55 if use_llm else 20))
     n_short = int(job["options"].get("shortlist_size", 10))
     for i, c in enumerate(job["candidates"]):
-        if c["stage"] in ("Sourced", "Shortlisted"):
+        if c["stage"] in ("Sourced", "Shortlisted") and not c.get("stage_manual"):
             c["stage"] = "Shortlisted" if (i < n_short and c["score"] >= threshold) else "Sourced"
         if not c.get("rationale"):
             c["rationale"] = "; ".join(c["strengths"]) or "Partial match — review manually."

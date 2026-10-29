@@ -9,7 +9,7 @@ export interface Candidate {
   id: string; name: string; headline: string; company: string; location: string; source: string; url: string;
   avatar: string; email: string; summary: string; skills: string[]; stage: string; notes: string; rating: number;
   github: GithubInfo | null; score: number; breakdown: Record<string, number>; rationale: string;
-  strengths: string[]; concerns: string[]; outreach_hook: string;
+  strengths: string[]; concerns: string[]; outreach_hook: string; round?: number; stage_manual?: boolean; excluded?: boolean;
 }
 export interface Role {
   title: string; company: string; location: string; seniority: string; function: string; industry: string;
@@ -41,6 +41,16 @@ export interface Job {
   source: { type: string; label: string }; options: Record<string, unknown>; steps: Step[];
   log: { t: string; msg: string }[]; jd_text: string; role: Role; recruiter_brief: RecruiterBrief;
   talent_map: TalentMap; strategy: Strategy; candidates: Candidate[];
+  refinement?: { exclude_companies: string[]; avoid_companies: string[]; boost_companies: string[]; rounds: RefineRound[] };
+}
+export interface Adjustments {
+  include_companies: string[]; exclude_companies: string[]; add_skills: string[]; remove_skills: string[];
+  add_titles: string[]; remove_titles: string[]; add_nice: string[]; location: string; seniority: string;
+}
+export interface RefineSignals { liked: number; rejected: number; liked_companies: string[]; liked_titles: string[]; avoid_companies: string[]; weak_sources: string[] }
+export interface RefineRound {
+  round: number; t: string; feedback: string; parsed_by: string; changes: string[]; signals: RefineSignals | null;
+  added: number; excluded: number; shortlisted_new: number;
 }
 export interface JobSummary {
   id: string; created_at: string; status: Job["status"]; mode: string; title: string; company: string; location: string;

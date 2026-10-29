@@ -1,12 +1,13 @@
 import clsx from "clsx";
 import {
   Activity, AlertTriangle, ArrowRight, Building2, CheckCircle2, ChevronLeft, CircleDashed, ClipboardList, Compass, Download, ExternalLink,
-  Flame, KanbanSquare, LayoutList, Lightbulb, Loader2, MapPin, MessageSquareQuote, Plus, RefreshCw, Search, Target, TrendingUp, Users, XCircle,
+  Flame, KanbanSquare, LayoutList, Lightbulb, Loader2, MapPin, MessageSquareQuote, Plus, RefreshCw, Search, Target, TrendingUp, Users, Wand2, XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, STAGES } from "../api";
 import CandidateDrawer, { ProfileLink, SourceIcon } from "../components/CandidateDrawer";
+import RefinePanel from "../components/RefinePanel";
 import { Avatar, Badge, Card, CopyButton, Empty, GithubIcon, LinkedinIcon, List, ScoreRing, Tabs, tierTone } from "../components/ui";
 import type { Candidate, Job } from "../types";
 
@@ -54,6 +55,7 @@ export default function JobDetail() {
             </div>
           </div>
           <div className="flex gap-2">
+            <button className="btn-primary" disabled={job.status === "running" || !ready("strategy")} onClick={() => setTab("refine")}><Wand2 className="h-4 w-4" />Refine search</button>
             <button className="btn-secondary" disabled={job.status === "running"} onClick={async () => { await api.resource(job.id); setTimeout(load, 300); }}><RefreshCw className="h-4 w-4" />Re-source</button>
             <a className="btn-secondary" href={api.exportUrl(job.id)}><Download className="h-4 w-4" />Export CSV</a>
           </div>
@@ -66,6 +68,7 @@ export default function JobDetail() {
         { key: "overview", label: "Recruiter brief", icon: <ClipboardList className="h-4 w-4" /> },
         { key: "map", label: "Talent map", icon: <Compass className="h-4 w-4" /> },
         { key: "strategy", label: "Sourcing strategy", icon: <Target className="h-4 w-4" /> },
+        { key: "refine", label: "Refine", icon: <Wand2 className="h-4 w-4" />, count: job.refinement?.rounds.length || undefined },
         { key: "candidates", label: "Candidates", icon: <Users className="h-4 w-4" />, count: job.candidates.length },
         { key: "pipeline", label: "Pipeline", icon: <KanbanSquare className="h-4 w-4" />, count: shortlisted },
         { key: "activity", label: "Agent activity", icon: <Activity className="h-4 w-4" /> },
@@ -74,6 +77,7 @@ export default function JobDetail() {
       {tab === "overview" && (ready("analyze") ? <Overview job={job} /> : <Waiting />)}
       {tab === "map" && (ready("talent_map") ? <TalentMapView job={job} /> : <Waiting />)}
       {tab === "strategy" && (ready("strategy") ? <StrategyView job={job} /> : <Waiting />)}
+      {tab === "refine" && (ready("strategy") ? <RefinePanel job={job} onStarted={load} onShowCandidates={() => setTab("candidates")} /> : <Waiting />)}
       {tab === "candidates" && <CandidatesView job={job} onOpen={setOpen} onPatch={patch} reload={load} />}
       {tab === "pipeline" && <Pipeline job={job} onOpen={setOpen} onPatch={patch} />}
       {tab === "activity" && <ActivityView job={job} />}
@@ -305,6 +309,7 @@ function CandidatesView({ job, onOpen, onPatch, reload }: { job: Job; onOpen: (i
   const [src, setSrc] = useState("All");
   const [stage, setStage] = useState("All");
   const [adding, setAdding] = useState(false);
+  const latest = job.refinement?.rounds.length || 0;
   const sources = ["All", ...Array.from(new Set(job.candidates.map((c) => c.source)))];
   const list = useMemo(() => job.candidates.filter((c) =>
     (src === "All" || c.source === src) && (stage === "All" || c.stage === stage) &&
@@ -336,7 +341,7 @@ function CandidatesView({ job, onOpen, onPatch, reload }: { job: Job; onOpen: (i
                     <div className="flex items-center gap-3">
                       <Avatar name={c.name} src={c.avatar} />
                       <div className="min-w-0">
-                        <div className="font-medium text-slate-900 flex items-center gap-1">{c.name}<ProfileLink c={c} /></div>
+                        <div className="font-medium text-slate-900 flex items-center gap-1">{c.name}<ProfileLink c={c} />{latest > 0 && c.round === latest && <Badge tone="green">New</Badge>}</div>
                         <div className="text-xs text-slate-500 truncate max-w-xs">{c.headline || c.company || "—"}</div>
                         <div className="text-xs text-slate-400 flex gap-3">{c.company && <span>{c.company}</span>}{c.location && <span>{c.location}</span>}</div>
                       </div>
